@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>SimVROptimizer</AssemblyName>
+    <RootNamespace>SimVROptimizer.App</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>1.6.1</Version>
+    <Product>VR Auto-Optimizer</Product>
+    <Description>Transactional flight simulator session optimizer for Windows.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\SimVROptimizer.Core\SimVROptimizer.Core.csproj" />
+  </ItemGroup>
+</Project>
