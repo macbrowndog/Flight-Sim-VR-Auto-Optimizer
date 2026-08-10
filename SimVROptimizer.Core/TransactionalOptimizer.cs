@@ -135,11 +135,30 @@ public sealed class TransactionalOptimizer
         if (dryRun) return;
 
         var query = await _commands.RunAsync("sc.exe", ["query", serviceName], cancellationToken).ConfigureAwait(false);
-        if (!query.Succeeded) throw new InvalidOperationException($"Could not query service {serviceName}: {query.StandardError.Trim()}");
+        if (!query.Succeeded)
+        {
+            await ReportAsync($"Skipped service {serviceName}: Windows would not allow its state to be queried.", cancellationToken).ConfigureAwait(false);
+            return;
+        }
         if (!OutputParsers.IsServiceRunning(query.StandardOutput)) return;
 
-        await RecordAsync(new StateMutation(MutationKind.Service, serviceName, "running", "stopped", DateTimeOffset.UtcNow), cancellationToken);
-        await RequiredCommandAsync("sc.exe", ["stop", serviceName], cancellationToken).ConfigureAwait(false);
+        var mutation = new StateMutation(MutationKind.Service, serviceName, "running", "stopped", DateTimeOffset.UtcNow);
+        await RecordAsync(mutation, cancellationToken);
+        var stop = await _commands.RunAsync("sc.exe", ["stop", serviceName], cancellationToken).ConfigureAwait(false);
+        if (!stop.Succeeded)
+        {
+            var stateAfterFailure = await _commands.RunAsync("sc.exe", ["query", serviceName], cancellationToken).ConfigureAwait(false);
+            if (stateAfterFailure.Succeeded && !OutputParsers.IsServiceRunning(stateAfterFailure.StandardOutput))
+            {
+                await ReportAsync($"Stopped service {serviceName}; Windows returned exit code {stop.ExitCode} while confirming the request.", cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            await RemoveMutationAsync(mutation, cancellationToken).ConfigureAwait(false);
+            var detail = FirstNonBlank(stop.StandardError, stop.StandardOutput, $"exit code {stop.ExitCode}");
+            await ReportAsync($"Skipped service {serviceName}: Windows refused the stop request ({detail.Trim()}).", cancellationToken).ConfigureAwait(false);
+            return;
+        }
         await ReportAsync($"Stopped service {serviceName}.", cancellationToken);
     }
 
@@ -164,7 +183,10 @@ public sealed class TransactionalOptimizer
 
     private async Task StopApplicationAsync(RunningAppCandidate application, bool dryRun, CancellationToken cancellationToken)
     {
-        await ReportAsync($"Application {application.DisplayName}: would stop for this session and restart afterward.", cancellationToken);
+        var recoveryDescription = application.RestartSupport == "Automatic"
+            ? "restart afterward"
+            : "be restarted by Windows or the user when needed";
+        await ReportAsync($"Application {application.DisplayName}: would stop for this session and {recoveryDescription}.", cancellationToken);
         if (dryRun) return;
 
         var processes = Process.GetProcessesByName(application.ProcessName);
@@ -320,7 +342,8 @@ public sealed class TransactionalOptimizer
         if (restartCommand.StartsWith("exe:", StringComparison.OrdinalIgnoreCase))
         {
             var executable = restartCommand[4..];
-            if (File.Exists(executable)) Process.Start(new ProcessStartInfo(executable) { UseShellExecute = true });
+            if (ApplicationRestartPolicy.CanLaunchDirectly(executable) && File.Exists(executable))
+                Process.Start(new ProcessStartInfo(executable) { UseShellExecute = true });
             return;
         }
 
@@ -350,6 +373,16 @@ public sealed class TransactionalOptimizer
         _journal.Mutations.Add(mutation);
         await PersistAsync(cancellationToken).ConfigureAwait(false);
     }
+
+    private async Task RemoveMutationAsync(StateMutation mutation, CancellationToken cancellationToken)
+    {
+        if (_journal is null) throw new InvalidOperationException("No active session journal.");
+        _journal.Mutations.Remove(mutation);
+        await PersistAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static string FirstNonBlank(params string[] values) =>
+        values.First(value => !string.IsNullOrWhiteSpace(value));
 
     private Task PersistAsync(CancellationToken cancellationToken) =>
         JsonStore.SaveAtomicAsync(_paths.JournalFile, _journal, cancellationToken);

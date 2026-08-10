@@ -31,9 +31,14 @@ public sealed class VrRuntimeLauncher
                 ["PimaxPlay", "PimaxClient", "PiTool"],
                 null,
                 [
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Pimax", "PimaxClient", "pimaxui", "PimaxClient.exe"),
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Pimax", "PimaxClient", "pimaxui", "PimaxClient.exe"),
                     Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Pimax", "Pimax Play", "PimaxPlay.exe"),
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Pimax", "PimaxPlay", "PimaxPlay.exe"),
                     Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Pimax", "Runtime", "PimaxClient.exe"),
-                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Pimax", "PimaxPlay", "PimaxPlay.exe")
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Pimax", "Runtime", "launcher.exe"),
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Pimax", "PimaxPlay", "PimaxPlay.exe"),
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Pimax", "PimaxPlay.exe")
                 ]),
             [VrRuntimePreference.SteamVR] = new(
                 VrRuntimePreference.SteamVR,

@@ -75,6 +75,11 @@ public sealed class SystemScanner
         ["iCloudPhotos"] = new(ImpactLevel.Medium, "iCloud Photos Service", "Photo synchronization can use network, storage, CPU, and memory resources."),
         ["iCloudServices"] = new(ImpactLevel.Medium, "iCloud Services", "iCloud synchronization is not required while MSFS is running."),
         ["DiagTrack"] = new(ImpactLevel.Low, "Connected User Experiences and Telemetry", "Windows diagnostic telemetry is normally low impact but can be paused temporarily during the simulator session."),
+        ["MDCoreSvc"] = new(ImpactLevel.Low, "Microsoft Defender Core Service", "Protected Windows security service. It remains running during flight sessions."),
+        ["GameInputRedistService"] = new(ImpactLevel.Low, "Microsoft GameInput Service", "Protected controller-input service used by games and simulator hardware."),
+        ["NvContainerLocalSystem"] = new(ImpactLevel.Low, "NVIDIA Display Container", "Protected GPU support service used by NVIDIA settings and runtime components."),
+        ["PiServiceLauncher"] = new(ImpactLevel.Low, "Pimax Runtime Service", "Protected VR runtime service required by Pimax Play and the headset."),
+        ["PrivateInternetAccessService"] = new(ImpactLevel.Low, "Private Internet Access Service", "Protected network-tunnel service. Stopping it can interrupt an active simulator connection."),
         ["ClickToRunSvc"] = new(ImpactLevel.Low, "Microsoft Office Click-to-Run", "Office update and streaming activity is not required while MSFS is running."),
         ["EABackgroundService"] = new(ImpactLevel.Low, "EA Background Service", "The EA launcher background service is not required for MSFS."),
         ["EpicOnlineServices"] = new(ImpactLevel.Low, "Epic Online Services", "Epic background services are not normally required for MSFS."),
@@ -217,7 +222,7 @@ public sealed class SystemScanner
         foreach (var rule in rules.Where(rule => !string.IsNullOrWhiteSpace(rule.ProcessName)))
         {
             var processName = NormalizeProcessName(rule.ProcessName);
-            if (NeverStopApps.Contains(processName) || ProtectedApps.Contains(processName)) continue;
+            if (NeverStopApps.Contains(processName) || IsProtectedApplication(processName)) continue;
 
             var processes = Process.GetProcessesByName(processName);
             try
@@ -280,7 +285,7 @@ public sealed class SystemScanner
                 MemoryMb = memory,
                 ExecutablePath = path,
                 RestartCommand = restartCommand,
-                CanStop = !ProtectedApps.Contains(group.Key)
+                CanStop = !IsProtectedApplication(group.Key)
             };
         }
         finally
@@ -337,14 +342,23 @@ public sealed class SystemScanner
 
     private static bool IsProtectedService(string name)
     {
-        if (name is "DoSvc" or "BITS" or "Steam Client Service") return true;
+        if (name is "DoSvc" or "BITS" or "Steam Client Service" or "MDCoreSvc" or "WinDefend" or "WdNisSvc" or "SecurityHealthService" or "Sense" or "wscsvc" or "mpssvc" or "BFE" or "GameInputRedistService" or "NvContainerLocalSystem" or "PiServiceLauncher" or "PrivateInternetAccessService") return true;
+        if (GetServiceLaunchProtection(name) != 0) return true;
         return name.Contains("Oculus", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("Defender", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("SecurityHealth", StringComparison.OrdinalIgnoreCase)
             || name.StartsWith("OVR", StringComparison.OrdinalIgnoreCase)
             || name.Contains("Pimax", StringComparison.OrdinalIgnoreCase)
             || name.Contains("SteamVR", StringComparison.OrdinalIgnoreCase)
             || name.Contains("OpenXR", StringComparison.OrdinalIgnoreCase)
             || name.Contains("VirtualDesktop", StringComparison.OrdinalIgnoreCase)
             || name.Contains("GamingServices", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("GameInput", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("ApplicationFrameHost", StringComparison.OrdinalIgnoreCase)
+            || name.StartsWith("PiService", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("NvContainer", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("PrivateInternetAccess", StringComparison.OrdinalIgnoreCase)
             || name.Contains("Xbox", StringComparison.OrdinalIgnoreCase)
             || name.Contains("SimConnect", StringComparison.OrdinalIgnoreCase)
             || name.Contains("FSUIPC", StringComparison.OrdinalIgnoreCase)
@@ -353,6 +367,44 @@ public sealed class SystemScanner
             || name.Contains("Honeycomb", StringComparison.OrdinalIgnoreCase)
             || name.Contains("Thrustmaster", StringComparison.OrdinalIgnoreCase)
             || name.Contains("Logitech", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsProtectedApplication(string name)
+    {
+        if (ProtectedApps.Contains(name)) return true;
+        return name.Contains("GamingServices", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("GameInput", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("TextInput", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("WindowsInput", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("nvcontainer", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("Pimax", StringComparison.OrdinalIgnoreCase)
+            || name.StartsWith("PiService", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("OpenXR", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("vrss", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("gaze", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("Tobii", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("Navigraph", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("Simlink", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("MOZA", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("SimRacingStudio", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("pia-service", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("PrivateInternetAccess", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("FSUIPC", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("TrackIR", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int GetServiceLaunchProtection(string serviceName)
+    {
+        try
+        {
+            return Registry.GetValue($@"HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\{serviceName}", "LaunchProtected", 0) is int value
+                ? value
+                : 0;
+        }
+        catch
+        {
+            return 0;
+        }
     }
 
     private static string? GetServiceImagePath(string serviceName)
@@ -392,7 +444,11 @@ public sealed class SystemScanner
 
     private static string ResolveRestartCommand(string processName, string? executablePath)
     {
-        if (!string.IsNullOrWhiteSpace(executablePath)) return "exe:" + executablePath;
+        if (processName is "PhoneExperienceHost" or "CrossDeviceService" or "YourPhone")
+            return @"shell:shell:AppsFolder\Microsoft.YourPhone_8wekyb3d8bbwe!App";
+
+        if (!string.IsNullOrWhiteSpace(executablePath))
+            return ApplicationRestartPolicy.CanLaunchDirectly(executablePath) ? "exe:" + executablePath : "none:";
 
         if (processName is "CCleaner" or "CCleaner64")
         {
@@ -404,9 +460,6 @@ public sealed class SystemScanner
             var candidate = candidates.FirstOrDefault(File.Exists);
             if (candidate is not null) return "exe:" + candidate;
         }
-
-        if (processName is "PhoneExperienceHost" or "CrossDeviceService" or "YourPhone")
-            return @"shell:shell:AppsFolder\Microsoft.YourPhone_8wekyb3d8bbwe!App";
 
         return "none:";
     }
