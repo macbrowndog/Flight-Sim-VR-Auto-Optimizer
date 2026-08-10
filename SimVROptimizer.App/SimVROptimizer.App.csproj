@@ -5,11 +5,15 @@
     <AssemblyName>SimVROptimizer</AssemblyName>
     <RootNamespace>SimVROptimizer.App</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>1.6.1</Version>
+    <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
+    <Version>1.8.0</Version>
     <Product>VR Auto-Optimizer</Product>
     <Description>Transactional flight simulator session optimizer for Windows.</Description>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\SimVROptimizer.Core\SimVROptimizer.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Resource Include="Assets\AppIcon.ico" />
   </ItemGroup>
 </Project>

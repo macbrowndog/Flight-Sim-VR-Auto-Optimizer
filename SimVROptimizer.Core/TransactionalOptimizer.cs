@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Microsoft.Win32;
 
 namespace SimVROptimizer.Core;
 
@@ -9,6 +10,7 @@ public sealed class TransactionalOptimizer
     private readonly AppPaths _paths;
     private readonly FileLogger _logger;
     private SessionJournal? _journal;
+    private bool _timerResolutionActive;
 
     public TransactionalOptimizer(ICommandRunner commands, AppPaths paths, FileLogger logger)
     {
@@ -39,14 +41,40 @@ public sealed class TransactionalOptimizer
         await ReportAsync(options.DryRun ? "Dry-run: no system settings will be changed." : "Recovery journal created.", cancellationToken);
         if (options.UseUltimatePowerPlan) await ApplyUltimatePowerPlanAsync(options.DryRun, cancellationToken).ConfigureAwait(false);
         if (options.EnableNvidiaPersistence) await EnableNvidiaPersistenceAsync(options.DryRun, cancellationToken).ConfigureAwait(false);
-        foreach (var service in services.Where(item => item.Selected && item.CanStop))
-            await StopServiceIfRunningAsync(service.ServiceName, options.DryRun, cancellationToken).ConfigureAwait(false);
+        if (options.FlushDnsCache) await FlushDnsCacheAsync(options.DryRun, cancellationToken).ConfigureAwait(false);
+        if (options.DisableGameDvr)
+        {
+            await SetRegistryDwordAsync(RegistryHive.CurrentUser, @"Software\Microsoft\Windows\CurrentVersion\GameDVR", "AppCaptureEnabled", 0, options.DryRun, cancellationToken).ConfigureAwait(false);
+            await SetRegistryDwordAsync(RegistryHive.CurrentUser, @"System\GameConfigStore", "GameDVR_Enabled", 0, options.DryRun, cancellationToken).ConfigureAwait(false);
+        }
+        if (options.DisableFullscreenOptimizations)
+            await SetRegistryDwordAsync(RegistryHive.CurrentUser, @"System\GameConfigStore", "GameDVR_FSEBehaviorMode", 2, options.DryRun, cancellationToken).ConfigureAwait(false);
+        if (options.ApplyNetworkMemoryOptimizations)
+        {
+            const string multimediaPath = @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile";
+            await SetRegistryDwordAsync(RegistryHive.LocalMachine, multimediaPath, "NetworkThrottlingIndex", uint.MaxValue, options.DryRun, cancellationToken).ConfigureAwait(false);
+            await SetRegistryDwordAsync(RegistryHive.LocalMachine, multimediaPath, "SystemResponsiveness", 0, options.DryRun, cancellationToken).ConfigureAwait(false);
+        }
+        if (options.UseHighResolutionTimer) await EnableHighResolutionTimerAsync(options.DryRun, cancellationToken).ConfigureAwait(false);
+        if (options.ClearStandbyMemory) await ClearStandbyMemoryAsync(options.DryRun, cancellationToken).ConfigureAwait(false);
+        if (options.Profile == OptimizationProfile.Aggressive)
+        {
+            foreach (var service in services.Where(item => item.Selected && item.CanStop))
+                await StopServiceIfRunningAsync(service.ServiceName, options.DryRun, cancellationToken).ConfigureAwait(false);
+        }
         foreach (var application in applications.Where(item => item.Selected && item.CanStop))
             await StopApplicationAsync(application, options.DryRun, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task RestoreAsync(CancellationToken cancellationToken = default)
     {
+        if (_timerResolutionActive)
+        {
+            AdvancedSystemTuning.ReleaseHalfMillisecondTimer();
+            _timerResolutionActive = false;
+            await ReportAsync("Released the high-resolution timer request.", cancellationToken).ConfigureAwait(false);
+        }
+
         var journal = _journal;
         if (journal is null && File.Exists(_paths.JournalFile))
         {
@@ -121,7 +149,11 @@ public sealed class TransactionalOptimizer
         if (dryRun) return;
 
         var query = await _commands.RunAsync("nvidia-smi.exe", ["--query-gpu=index,persistence_mode", "--format=csv,noheader"], cancellationToken).ConfigureAwait(false);
-        if (!query.Succeeded) throw new InvalidOperationException("NVIDIA persistence mode was requested but nvidia-smi could not query it.");
+        if (!query.Succeeded)
+        {
+            await ReportAsync("NVIDIA persistence was skipped because nvidia-smi is unavailable or no supported NVIDIA GPU was detected.", cancellationToken).ConfigureAwait(false);
+            return;
+        }
 
         foreach (var gpu in OutputParsers.ParseNvidiaPersistence(query.StandardOutput).Where(item => !item.Value))
         {
@@ -185,6 +217,101 @@ public sealed class TransactionalOptimizer
                 foreach (var runningProcess in runningProcesses) runningProcess.Dispose();
                 if (!isRunning) RestartApplication(mutation.OriginalValue);
                 break;
+            case MutationKind.RegistryValue:
+                RestoreRegistryValue(mutation);
+                break;
+        }
+    }
+
+    private async Task FlushDnsCacheAsync(bool dryRun, CancellationToken cancellationToken)
+    {
+        await ReportAsync("DNS cache: would flush cached resolver entries (one-time operation).", cancellationToken).ConfigureAwait(false);
+        if (!dryRun) await RequiredCommandAsync("ipconfig.exe", ["/flushdns"], cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task EnableHighResolutionTimerAsync(bool dryRun, CancellationToken cancellationToken)
+    {
+        await ReportAsync("Timer: would request a 0.5 ms system timer resolution for this session.", cancellationToken).ConfigureAwait(false);
+        if (dryRun) return;
+        if (AdvancedSystemTuning.TryRequestHalfMillisecondTimer(out var actual, out var error))
+        {
+            _timerResolutionActive = true;
+            await ReportAsync($"High-resolution timer active ({actual / 10_000d:0.###} ms actual).", cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            await ReportAsync($"High-resolution timer request was skipped: {error}.", cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task ClearStandbyMemoryAsync(bool dryRun, CancellationToken cancellationToken)
+    {
+        await ReportAsync("Memory: would clear the standby list (one-time operation; contents repopulate normally).", cancellationToken).ConfigureAwait(false);
+        if (dryRun) return;
+        var message = AdvancedSystemTuning.TryPurgeStandbyMemory(out var error)
+            ? "Standby memory list cleared."
+            : $"Standby memory clear was skipped: {error}.";
+        await ReportAsync(message, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task SetRegistryDwordAsync(
+        RegistryHive hive,
+        string path,
+        string name,
+        uint value,
+        bool dryRun,
+        CancellationToken cancellationToken)
+    {
+        var target = $"{hive}|{path}|{name}";
+        await ReportAsync($"Registry tuning: would set {hive}\\{path}\\{name}.", cancellationToken).ConfigureAwait(false);
+        if (dryRun) return;
+
+        using var baseKey = RegistryKey.OpenBaseKey(hive, RegistryView.Registry64);
+        using var existingKey = baseKey.OpenSubKey(path, writable: false);
+        var original = existingKey is null || !existingKey.GetValueNames().Contains(name, StringComparer.OrdinalIgnoreCase)
+            ? "absent"
+            : EncodeRegistryValue(existingKey.GetValue(name, null, RegistryValueOptions.DoNotExpandEnvironmentNames), existingKey.GetValueKind(name));
+        await RecordAsync(new StateMutation(MutationKind.RegistryValue, target, original, value.ToString(), DateTimeOffset.UtcNow), cancellationToken).ConfigureAwait(false);
+        using var writableKey = baseKey.CreateSubKey(path, writable: true)
+            ?? throw new InvalidOperationException($"Could not open registry path {path} for writing.");
+        writableKey.SetValue(name, unchecked((int)value), RegistryValueKind.DWord);
+    }
+
+    private static string EncodeRegistryValue(object? value, RegistryValueKind kind) => kind switch
+    {
+        RegistryValueKind.DWord => $"DWord:{Convert.ToUInt32(value)}",
+        RegistryValueKind.QWord => $"QWord:{Convert.ToUInt64(value)}",
+        RegistryValueKind.Binary => $"Binary:{Convert.ToBase64String((byte[])(value ?? Array.Empty<byte>()))}",
+        RegistryValueKind.ExpandString => $"ExpandString:{Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(value?.ToString() ?? ""))}",
+        _ => $"String:{Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(value?.ToString() ?? ""))}"
+    };
+
+    private static void RestoreRegistryValue(StateMutation mutation)
+    {
+        var parts = mutation.Target.Split('|', 3);
+        if (parts.Length != 3 || !Enum.TryParse<RegistryHive>(parts[0], out var hive))
+            throw new InvalidOperationException("The registry recovery entry is invalid.");
+        using var baseKey = RegistryKey.OpenBaseKey(hive, RegistryView.Registry64);
+        using var key = baseKey.CreateSubKey(parts[1], writable: true)
+            ?? throw new InvalidOperationException($"Could not open registry path {parts[1]} for restoration.");
+        if (mutation.OriginalValue == "absent")
+        {
+            key.DeleteValue(parts[2], throwOnMissingValue: false);
+            return;
+        }
+
+        var separator = mutation.OriginalValue.IndexOf(':');
+        if (separator < 0) throw new InvalidOperationException("The registry recovery value is invalid.");
+        var kind = mutation.OriginalValue[..separator];
+        var data = mutation.OriginalValue[(separator + 1)..];
+        switch (kind)
+        {
+            case "DWord": key.SetValue(parts[2], unchecked((int)uint.Parse(data)), RegistryValueKind.DWord); break;
+            case "QWord": key.SetValue(parts[2], unchecked((long)ulong.Parse(data)), RegistryValueKind.QWord); break;
+            case "Binary": key.SetValue(parts[2], Convert.FromBase64String(data), RegistryValueKind.Binary); break;
+            case "ExpandString": key.SetValue(parts[2], System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(data)), RegistryValueKind.ExpandString); break;
+            case "String": key.SetValue(parts[2], System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(data)), RegistryValueKind.String); break;
+            default: throw new InvalidOperationException($"Unsupported registry recovery type {kind}.");
         }
     }
 

@@ -100,11 +100,13 @@ public sealed class SystemScanner
     private readonly ICommandRunner _commands;
     public SystemScanner(ICommandRunner commands) => _commands = commands;
 
-    public async Task<SystemScanResult> ScanAsync(CancellationToken cancellationToken = default)
+    public async Task<SystemScanResult> ScanAsync(
+        IReadOnlyList<CustomApplicationRule>? customApplications = null,
+        CancellationToken cancellationToken = default)
     {
         var simulatorsTask = DetectSimulatorsAsync(cancellationToken);
         var servicesTask = ScanServicesAsync(cancellationToken);
-        var applications = ScanApplications();
+        var applications = ScanApplications(customApplications ?? []);
         return new SystemScanResult
         {
             Simulators = await simulatorsTask.ConfigureAwait(false),
@@ -191,17 +193,62 @@ public sealed class SystemScanner
         }
     }
 
-    private static IReadOnlyList<RunningAppCandidate> ScanApplications()
+    private static IReadOnlyList<RunningAppCandidate> ScanApplications(IReadOnlyList<CustomApplicationRule> customApplications)
     {
-        return Process.GetProcesses()
+        var applications = Process.GetProcesses()
             .Where(process => !NeverStopApps.Contains(process.ProcessName))
             .GroupBy(process => process.ProcessName, StringComparer.OrdinalIgnoreCase)
             .Select(CreateAppCandidate)
             .Where(candidate => candidate is not null)
             .Cast<RunningAppCandidate>()
+            .ToDictionary(candidate => candidate.ProcessName, StringComparer.OrdinalIgnoreCase);
+
+        ApplyCustomApplications(applications, customApplications);
+        return applications.Values
             .OrderBy(candidate => candidate.Impact)
             .ThenByDescending(candidate => candidate.MemoryMb)
             .ToArray();
+    }
+
+    private static void ApplyCustomApplications(
+        IDictionary<string, RunningAppCandidate> applications,
+        IEnumerable<CustomApplicationRule> rules)
+    {
+        foreach (var rule in rules.Where(rule => !string.IsNullOrWhiteSpace(rule.ProcessName)))
+        {
+            var processName = NormalizeProcessName(rule.ProcessName);
+            if (NeverStopApps.Contains(processName) || ProtectedApps.Contains(processName)) continue;
+
+            var processes = Process.GetProcessesByName(processName);
+            try
+            {
+                if (processes.Length == 0) continue;
+                applications.TryGetValue(processName, out var existing);
+                var discoveredPath = processes
+                    .Select(process => TryGet(() => process.MainModule?.FileName, null))
+                    .FirstOrDefault(path => !string.IsNullOrWhiteSpace(path));
+                var restartPath = string.IsNullOrWhiteSpace(rule.RestartExecutablePath)
+                    ? discoveredPath
+                    : Environment.ExpandEnvironmentVariables(rule.RestartExecutablePath.Trim().Trim('"'));
+                applications[processName] = new RunningAppCandidate
+                {
+                    ProcessName = processName,
+                    DisplayName = existing?.DisplayName ?? processName,
+                    Impact = existing?.Impact ?? ImpactLevel.Unknown,
+                    Reason = "Persistent custom application rule. The process is stopped for the session and restarted from the configured executable when available.",
+                    InstanceCount = processes.Length,
+                    MemoryMb = processes.Sum(process => TryGet(() => process.WorkingSet64, 0L)) / 1024 / 1024,
+                    ExecutablePath = discoveredPath,
+                    RestartCommand = string.IsNullOrWhiteSpace(restartPath) ? "none:" : "exe:" + restartPath,
+                    CanStop = true,
+                    IsCustom = true
+                };
+            }
+            finally
+            {
+                foreach (var process in processes) process.Dispose();
+            }
+        }
     }
 
     private static RunningAppCandidate? CreateAppCandidate(IGrouping<string, Process> group)
@@ -244,7 +291,9 @@ public sealed class SystemScanner
 
     private async Task<IReadOnlyList<ServiceCandidate>> ScanServicesAsync(CancellationToken cancellationToken)
     {
-        var result = await _commands.RunAsync("sc.exe", ["query", "type=", "service", "state=", "active"], cancellationToken).ConfigureAwait(false);
+        // Omitting state= uses SC's compatible default of active services. Some current
+        // Windows builds reject the otherwise documented "state= active" spelling.
+        var result = await _commands.RunAsync("sc.exe", ["query", "type=", "service"], cancellationToken).ConfigureAwait(false);
         if (!result.Succeeded) return [];
         var runningNames = OutputParsers.ParseRunningServices(result.StandardOutput);
         return runningNames
@@ -330,6 +379,12 @@ public sealed class SystemScanner
     {
         try { return getter(); }
         catch { return fallback; }
+    }
+
+    private static string NormalizeProcessName(string value)
+    {
+        var name = value.Trim();
+        return name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? name[..^4] : name;
     }
 
     private static string FirstNonBlank(params string?[] values) =>

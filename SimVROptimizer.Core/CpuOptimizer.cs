@@ -8,13 +8,26 @@ namespace SimVROptimizer.Core;
 public sealed record CpuOptimizationScope(
     ProcessPriorityClass OriginalPriority,
     IReadOnlyList<uint> OriginalCpuSetIds,
+    ProcessPowerThrottlingState OriginalPowerThrottling,
     bool PriorityChanged,
     bool CpuSetsChanged,
+    bool PowerThrottlingChanged,
     string Summary);
+
+[StructLayout(LayoutKind.Sequential)]
+public struct ProcessPowerThrottlingState
+{
+    public uint Version;
+    public uint ControlMask;
+    public uint StateMask;
+}
 
 public sealed class CpuOptimizer
 {
     private const int ErrorInsufficientBuffer = 122;
+    private const int ProcessPowerThrottling = 4;
+    private const uint PowerThrottlingCurrentVersion = 1;
+    private const uint PowerThrottlingExecutionSpeed = 1;
 
     public CpuProfile GetProfile()
     {
@@ -49,6 +62,7 @@ public sealed class CpuOptimizer
         var profile = GetProfile();
         var originalPriority = process.PriorityClass;
         var originalCpuSets = ReadProcessCpuSets(process.Handle);
+        var originalPowerThrottling = ReadPowerThrottling(process.Handle);
         var requestedPriority = options.ProcessPriority switch
         {
             ProcessPriorityPreference.Normal => ProcessPriorityClass.Normal,
@@ -110,9 +124,22 @@ public sealed class CpuOptimizer
             strategy = "Unknown CPU vendor; Windows scheduler retained";
         }
 
+        var powerThrottlingChanged = false;
+        if (options.DisablePowerThrottling)
+        {
+            var disabled = new ProcessPowerThrottlingState
+            {
+                Version = PowerThrottlingCurrentVersion,
+                ControlMask = PowerThrottlingExecutionSpeed,
+                StateMask = 0
+            };
+            if (SetProcessInformation(process.Handle, ProcessPowerThrottling, ref disabled, (uint)Marshal.SizeOf<ProcessPowerThrottlingState>()))
+                powerThrottlingChanged = true;
+        }
+
         var summary = $"CPU Vendor={profile.Vendor}; Model={profile.Model}; Cores={profile.PhysicalCoreCount}; " +
                       $"Logical={profile.LogicalProcessorCount}; Priority={requestedPriority}; Strategy={strategy}.";
-        return new CpuOptimizationScope(originalPriority, originalCpuSets, priorityChanged, cpuSetsChanged, summary);
+        return new CpuOptimizationScope(originalPriority, originalCpuSets, originalPowerThrottling, priorityChanged, cpuSetsChanged, powerThrottlingChanged, summary);
     }
 
     public void Restore(Process process, CpuOptimizationScope scope)
@@ -125,6 +152,20 @@ public sealed class CpuOptimizer
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not restore original CPU sets.");
         }
         if (scope.PriorityChanged) process.PriorityClass = scope.OriginalPriority;
+        if (scope.PowerThrottlingChanged)
+        {
+            var original = scope.OriginalPowerThrottling;
+            if (!SetProcessInformation(process.Handle, ProcessPowerThrottling, ref original, (uint)Marshal.SizeOf<ProcessPowerThrottlingState>()))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not restore process power throttling.");
+        }
+    }
+
+    private static ProcessPowerThrottlingState ReadPowerThrottling(IntPtr processHandle)
+    {
+        var state = new ProcessPowerThrottlingState { Version = PowerThrottlingCurrentVersion };
+        return GetProcessInformation(processHandle, ProcessPowerThrottling, ref state, (uint)Marshal.SizeOf<ProcessPowerThrottlingState>())
+            ? state
+            : new ProcessPowerThrottlingState { Version = PowerThrottlingCurrentVersion };
     }
 
     private static IReadOnlyList<CpuSetDescriptor> ReadSystemCpuSets()
@@ -202,4 +243,12 @@ public sealed class CpuOptimizer
         IntPtr process,
         [In] uint[]? cpuSetIds,
         uint cpuSetIdCount);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetProcessInformation(IntPtr process, int informationClass, ref ProcessPowerThrottlingState information, uint informationSize);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetProcessInformation(IntPtr process, int informationClass, ref ProcessPowerThrottlingState information, uint informationSize);
 }

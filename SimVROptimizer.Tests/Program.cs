@@ -8,7 +8,12 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Running service parser", TestRunningServiceParserAsync),
     ("Impact service scan", TestImpactServiceScanAsync),
     ("CPU topology scan", TestCpuTopologyAsync),
+    ("Optimization profiles", TestOptimizationProfilesAsync),
     ("Automatic selection policy", TestAutomaticSelectionPolicyAsync),
+    ("Persistent custom application rule", TestCustomApplicationRuleAsync),
+    ("Nine simulator configurations", TestSimulatorCatalogAsync),
+    ("MSFS 2024 FastLaunch plans", TestMsfs2024FastLaunchAsync),
+    ("Log rotation", TestLogRotationAsync),
     ("Pending launch roundtrip", TestPendingLaunchRoundtripAsync),
     ("Dry-run makes no journal", TestDryRunAsync),
     ("Transactional restore", TestTransactionalRestoreAsync),
@@ -74,6 +79,7 @@ static async Task TestImpactServiceScanAsync()
             : Ok()
     };
     var result = await new SystemScanner(commands).ScanAsync();
+    True(commands.Calls.Any(call => call.File == "sc.exe" && string.Join(" ", call.Args) == "query type= service"));
     True(result.Applications.All(application => !string.IsNullOrWhiteSpace(application.DisplayName)));
     Equal(5, result.Services.Count);
     True(result.Services.Single(service => service.ServiceName == "NahimicService").CanStop);
@@ -95,27 +101,122 @@ static Task TestCpuTopologyAsync()
 
 static Task TestAutomaticSelectionPolicyAsync()
 {
-    var restartable = new RunningAppCandidate { ProcessName = "Restartable", DisplayName = "Restartable", Impact = ImpactLevel.Low, Reason = "test", InstanceCount = 1, MemoryMb = 1, RestartCommand = "exe:C:\\restartable.exe", CanStop = true };
+    var restartable = new RunningAppCandidate { ProcessName = "Restartable", DisplayName = "Restartable", Impact = ImpactLevel.Medium, Reason = "test", InstanceCount = 1, MemoryMb = 1, RestartCommand = "exe:C:\\restartable.exe", CanStop = true };
+    var lowImpact = new RunningAppCandidate { ProcessName = "LowImpact", DisplayName = "LowImpact", Impact = ImpactLevel.Low, Reason = "test", InstanceCount = 1, MemoryMb = 1, RestartCommand = "exe:C:\\low.exe", CanStop = true };
     var manualRestart = new RunningAppCandidate { ProcessName = "Manual", DisplayName = "Manual", Impact = ImpactLevel.Low, Reason = "test", InstanceCount = 1, MemoryMb = 1, RestartCommand = "none:", CanStop = true };
     var protectedApp = new RunningAppCandidate { ProcessName = "Protected", DisplayName = "Protected", Impact = ImpactLevel.Low, Reason = "test", InstanceCount = 1, MemoryMb = 1, RestartCommand = "exe:C:\\protected.exe", CanStop = false };
-    var stoppableService = new ServiceCandidate { ServiceName = "Stoppable", DisplayName = "Stoppable", Impact = ImpactLevel.Low, Reason = "test", CanStop = true };
+    var stoppableService = new ServiceCandidate { ServiceName = "Stoppable", DisplayName = "Stoppable", Impact = ImpactLevel.Medium, Reason = "test", CanStop = true };
     var protectedService = new ServiceCandidate { ServiceName = "Protected", DisplayName = "Protected", Impact = ImpactLevel.Low, Reason = "test", CanStop = false };
 
-    SessionSelectionPolicy.SelectAutomatic([restartable, manualRestart, protectedApp], [stoppableService, protectedService]);
+    SessionSelectionPolicy.SelectAutomatic([restartable, lowImpact, manualRestart, protectedApp], [stoppableService, protectedService]);
     True(restartable.Selected);
+    True(!lowImpact.Selected);
     True(!manualRestart.Selected);
     True(!protectedApp.Selected);
-    True(stoppableService.Selected);
+    True(!stoppableService.Selected);
     True(!protectedService.Selected);
+
+    SessionSelectionPolicy.SelectAutomatic([lowImpact], [], profile: OptimizationProfile.Aggressive);
+    True(lowImpact.Selected);
 
     var obs = new RunningAppCandidate { ProcessName = "obs64", DisplayName = "OBS Studio", Impact = ImpactLevel.Medium, Reason = "test", InstanceCount = 1, MemoryMb = 1, RestartCommand = "exe:C:\\obs64.exe", CanStop = true };
     var streamDeckService = new ServiceCandidate { ServiceName = "ElgatoRemoteControlServer", DisplayName = "Elgato Remote Control", Impact = ImpactLevel.Low, Reason = "test", CanStop = true };
-    SessionSelectionPolicy.SelectAutomatic([restartable, obs], [stoppableService, streamDeckService], contentCreatorMode: true);
+    SessionSelectionPolicy.SelectAutomatic([restartable, obs], [stoppableService, streamDeckService], contentCreatorMode: true, profile: OptimizationProfile.Aggressive);
     True(restartable.Selected);
     True(!obs.Selected);
     True(stoppableService.Selected);
     True(!streamDeckService.Selected);
     return Task.CompletedTask;
+}
+
+static Task TestOptimizationProfilesAsync()
+{
+    var options = new OptimizerOptions();
+    OptimizationProfiles.Apply(options, OptimizationProfile.Aggressive);
+    Equal(OptimizationProfile.Aggressive, options.Profile);
+    Equal(ProcessPriorityPreference.High, options.ProcessPriority);
+    True(options.UseVendorAwareCpuSets);
+    True(options.EnableNvidiaPersistence);
+    True(options.UseMsfs2024FastLaunch);
+    True(options.FlushDnsCache);
+    True(options.DisableGameDvr);
+    True(options.ClearStandbyMemory);
+    True(options.UseHighResolutionTimer);
+    True(options.DisableFullscreenOptimizations);
+    True(options.DisablePowerThrottling);
+    True(options.ApplyNetworkMemoryOptimizations);
+
+    OptimizationProfiles.Apply(options, OptimizationProfile.Standard);
+    Equal(ProcessPriorityPreference.High, options.ProcessPriority);
+    True(options.UseVendorAwareCpuSets);
+    True(options.EnableNvidiaPersistence);
+    True(options.UseMsfs2024FastLaunch);
+    True(options.FlushDnsCache);
+    True(!options.DisableGameDvr);
+    True(!options.ClearStandbyMemory);
+    True(!options.UseHighResolutionTimer);
+    True(!options.DisableFullscreenOptimizations);
+    True(!options.DisablePowerThrottling);
+    True(!options.ApplyNetworkMemoryOptimizations);
+    return Task.CompletedTask;
+}
+
+static async Task TestCustomApplicationRuleAsync()
+{
+    using var currentProcess = System.Diagnostics.Process.GetCurrentProcess();
+    var processName = currentProcess.ProcessName;
+    var commands = new FakeCommandRunner
+    {
+        Handler = (file, _) => file == "sc.exe" ? Ok("") : Ok()
+    };
+    var result = await new SystemScanner(commands).ScanAsync([
+        new CustomApplicationRule { ProcessName = processName, RestartExecutablePath = Environment.ProcessPath ?? "" }
+    ]);
+    var candidate = result.Applications.Single(application => application.ProcessName.Equals(processName, StringComparison.OrdinalIgnoreCase));
+    True(candidate.IsCustom);
+    Equal("Automatic", candidate.RestartSupport);
+}
+
+static Task TestSimulatorCatalogAsync()
+{
+    Equal(9, SimulatorCatalog.SupportedConfigurationCount);
+    True(SimulatorCatalog.Find("il2-sturmovik-steam") is not null);
+    Equal("il2-sturmovik-steam", SimulatorCatalog.SteamByAppId["307960"].Id);
+    return Task.CompletedTask;
+}
+
+static Task TestMsfs2024FastLaunchAsync()
+{
+    var options = new OptimizerOptions { UseMsfs2024FastLaunch = true };
+    var steam = SimulatorLauncher.CreateLaunchPlan(SimulatorCatalog.Find("msfs2024-steam")!, options);
+    Equal("steam://run/2537590//-FastLaunch/", steam.Target);
+    Equal("", steam.Arguments);
+
+    var store = SimulatorLauncher.CreateLaunchPlan(SimulatorCatalog.Find("msfs2024-store")!, options);
+    Equal("shell:AppsFolder\\Microsoft.Limitless_8wekyb3d8bbwe!App", store.Target);
+    Equal("-FastLaunch", store.Arguments);
+
+    options.UseMsfs2024FastLaunch = false;
+    var disabled = SimulatorLauncher.CreateLaunchPlan(SimulatorCatalog.Find("msfs2024-steam")!, options);
+    Equal("steam://run/2537590", disabled.Target);
+
+    options.UseMsfs2024FastLaunch = true;
+    var msfs2020 = SimulatorLauncher.CreateLaunchPlan(SimulatorCatalog.Find("msfs2020-steam")!, options);
+    Equal("steam://run/1250410", msfs2020.Target);
+    return Task.CompletedTask;
+}
+
+static async Task TestLogRotationAsync()
+{
+    var directory = Path.Combine(AppContext.BaseDirectory, "test-data", Guid.NewGuid().ToString("N"));
+    var path = Path.Combine(directory, "optimizer.log");
+    var logger = new FileLogger(path, maxBytes: 1024, retainedFiles: 2);
+    await logger.WriteAsync(new string('A', 700));
+    await logger.WriteAsync(new string('B', 700));
+    await logger.WriteAsync(new string('C', 700));
+    True(File.Exists(path));
+    True(File.Exists(path + ".1"));
+    True(File.Exists(path + ".2"));
 }
 
 static async Task TestPendingLaunchRoundtripAsync()
@@ -127,16 +228,20 @@ static async Task TestPendingLaunchRoundtripAsync()
     {
         SimulatorId = "msfs2024-store",
         SessionMode = SessionMode.Automatic,
-        Options = new OptimizerOptions { DryRun = false, ProcessPriority = ProcessPriorityPreference.High, ContentCreatorMode = true },
+        Options = new OptimizerOptions { DryRun = false, Profile = OptimizationProfile.Aggressive, ProcessPriority = ProcessPriorityPreference.High, ContentCreatorMode = true, VrRuntime = VrRuntimePreference.SteamVR },
         ProcessNames = ["OneDrive"],
-        ServiceNames = ["GoogleUpdaterService"]
+        ServiceNames = ["GoogleUpdaterService"],
+        CustomApplications = [new CustomApplicationRule { ProcessName = "CustomTool", RestartExecutablePath = @"C:\\Tools\\CustomTool.exe" }]
     };
     await JsonStore.SaveAtomicAsync(file, pending);
     var loaded = await JsonStore.LoadRequiredAsync<PendingLaunch>(file);
     Equal(SessionMode.Automatic, loaded.SessionMode);
     Equal(ProcessPriorityPreference.High, loaded.Options.ProcessPriority);
+    Equal(OptimizationProfile.Aggressive, loaded.Options.Profile);
+    Equal(VrRuntimePreference.SteamVR, loaded.Options.VrRuntime);
     True(loaded.Options.ContentCreatorMode);
     Equal("OneDrive", loaded.ProcessNames.Single());
+    Equal("CustomTool", loaded.CustomApplications.Single().ProcessName);
 }
 
 static async Task TestDryRunAsync()
@@ -191,8 +296,10 @@ static async Task TestTransactionalRestoreAsync()
     await fixture.Optimizer.BeginAsync("Test Sim", new OptimizerOptions
     {
         DryRun = false,
+        Profile = OptimizationProfile.Aggressive,
         UseUltimatePowerPlan = true,
-        EnableNvidiaPersistence = true
+        EnableNvidiaPersistence = true,
+        FlushDnsCache = false
     }, [], services, CancellationToken.None);
     True(File.Exists(fixture.Paths.JournalFile));
 

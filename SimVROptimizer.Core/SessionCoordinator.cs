@@ -6,19 +6,33 @@ public sealed class SessionCoordinator
 {
     private readonly TransactionalOptimizer _optimizer;
     private readonly SimulatorLauncher _launcher;
+    private readonly VrRuntimeLauncher? _vrRuntimeLauncher;
     private readonly SemaphoreSlim _sessionGate = new(1, 1);
 
-    public SessionCoordinator(TransactionalOptimizer optimizer, SimulatorLauncher launcher)
+    public SessionCoordinator(TransactionalOptimizer optimizer, SimulatorLauncher launcher, VrRuntimeLauncher? vrRuntimeLauncher = null)
     {
         _optimizer = optimizer;
         _launcher = launcher;
+        _vrRuntimeLauncher = vrRuntimeLauncher;
     }
 
     public event Action<string>? StatusChanged
     {
-        add { _optimizer.StatusChanged += value; _launcher.StatusChanged += value; }
-        remove { _optimizer.StatusChanged -= value; _launcher.StatusChanged -= value; }
+        add
+        {
+            _optimizer.StatusChanged += value;
+            _launcher.StatusChanged += value;
+            if (_vrRuntimeLauncher is not null) _vrRuntimeLauncher.StatusChanged += value;
+        }
+        remove
+        {
+            _optimizer.StatusChanged -= value;
+            _launcher.StatusChanged -= value;
+            if (_vrRuntimeLauncher is not null) _vrRuntimeLauncher.StatusChanged -= value;
+        }
     }
+
+    public event Action<SessionProgress>? ProgressChanged;
 
     public bool HasRecoveryJournal => _optimizer.HasRecoveryJournal;
     public bool IsRunning { get; private set; }
@@ -40,9 +54,19 @@ public sealed class SessionCoordinator
 
         IsRunning = true;
         Process? process = null;
+        VrRuntimeSession? runtimeSession = null;
         try
         {
+            ReportProgress(SessionStage.Prepare, "PREPARE", "Validating the selected simulator and recovery state.");
+            ReportProgress(SessionStage.Optimize, "OPTIMIZE", $"Applying the {options.Profile} profile and selected granular controls.");
             await _optimizer.BeginAsync(simulator.Name, options, applications, services, cancellationToken).ConfigureAwait(false);
+            ReportProgress(SessionStage.VrRuntime, "VR RUNTIME", options.VrRuntime == VrRuntimePreference.None
+                ? "No automatic VR runtime selected."
+                : $"Starting or checking {options.VrRuntime}.");
+            if (_vrRuntimeLauncher is not null)
+                runtimeSession = await _vrRuntimeLauncher.LaunchAsync(options.VrRuntime, cancellationToken).ConfigureAwait(false);
+
+            ReportProgress(SessionStage.Simulator, "SIMULATOR", $"Launching and monitoring {simulator.Name}.");
             process = await _launcher.LaunchAndWaitAsync(simulator, options, cancellationToken).ConfigureAwait(false);
             if (process is not null)
             {
@@ -53,8 +77,11 @@ public sealed class SessionCoordinator
         {
             try
             {
+                ReportProgress(SessionStage.Restore, "RESTORE", "Returning the recorded system and runtime state.");
                 if (process is not null)
                     await _launcher.RestoreProcessTuningAsync(process, CancellationToken.None).ConfigureAwait(false);
+                if (_vrRuntimeLauncher is not null)
+                    await _vrRuntimeLauncher.RestoreAsync(runtimeSession, CancellationToken.None).ConfigureAwait(false);
                 await _optimizer.RestoreAsync(CancellationToken.None).ConfigureAwait(false);
             }
             finally
@@ -67,4 +94,7 @@ public sealed class SessionCoordinator
     }
 
     public Task RestoreRecoveryAsync(CancellationToken cancellationToken = default) => _optimizer.RestoreAsync(cancellationToken);
+
+    private void ReportProgress(SessionStage stage, string title, string detail) =>
+        ProgressChanged?.Invoke(new SessionProgress(stage, title, detail));
 }

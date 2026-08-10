@@ -18,6 +18,7 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _sessionCancellation;
     private Task? _sessionTask;
     private bool _allowClose;
+    private bool _applyingConfig;
 
     public MainWindow(bool continueSession = false)
     {
@@ -27,9 +28,10 @@ public partial class MainWindow : Window
         var logger = new FileLogger(_paths.LogFile);
         var commands = new CommandRunner();
         var optimizer = new TransactionalOptimizer(commands, _paths, logger);
-        _coordinator = new SessionCoordinator(optimizer, new SimulatorLauncher(logger));
+        _coordinator = new SessionCoordinator(optimizer, new SimulatorLauncher(logger), new VrRuntimeLauncher(logger));
         _scanner = new SystemScanner(commands);
         _coordinator.StatusChanged += AppendStatus;
+        _coordinator.ProgressChanged += UpdatePipeline;
         AdminLabel.Text = AdminService.IsAdministrator() ? "ADMINISTRATOR" : "STANDARD USER";
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
@@ -93,7 +95,7 @@ public partial class MainWindow : Window
                 ? $" Content Creator Mode will keep {creatorApps} creator application(s) and {creatorServices} helper service(s) running."
                 : "";
             var answer = MessageBox.Show(
-                $"Automatic mode will close {selectedApps} selected application(s), stop {selectedServices} selected service(s), apply CPU settings, and launch {simulator.Name}.{creatorSummary} Save your work first. Continue?",
+                $"Automatic {_config.Options.Profile} mode will close {selectedApps} selected application(s), stop {selectedServices} selected service(s), apply CPU settings, launch {_config.Options.VrRuntime}, and start {simulator.Name}.{creatorSummary} Save your work first. Continue?",
                 "Confirm automatic session",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Warning);
@@ -117,7 +119,8 @@ public partial class MainWindow : Window
                         SessionMode = _config.SessionMode,
                         Options = _config.Options,
                         ProcessNames = _applications.Where(item => item.Selected && item.CanStop).Select(item => item.ProcessName).ToArray(),
-                        ServiceNames = _services.Where(item => item.Selected && item.CanStop).Select(item => item.ServiceName).ToArray()
+                        ServiceNames = _services.Where(item => item.Selected && item.CanStop).Select(item => item.ServiceName).ToArray(),
+                        CustomApplications = _config.CustomApplications
                     };
                     await JsonStore.SaveAtomicAsync(_paths.PendingLaunchFile, pending);
                     AdminService.RelaunchElevated("--continue-session");
@@ -164,6 +167,7 @@ public partial class MainWindow : Window
             _sessionCancellation = null;
             SetRunningState(false);
             UpdateRecoveryState();
+            if (!_coordinator.HasRecoveryJournal) CompletePipeline();
         }
     }
 
@@ -240,26 +244,55 @@ public partial class MainWindow : Window
         Options = new OptimizerOptions
         {
             DryRun = false,
+            Profile = ProfileCombo.SelectedItem is OptimizationProfile profile ? profile : OptimizationProfile.Standard,
             UseUltimatePowerPlan = PowerPlanCheck.IsChecked == true,
             ProcessPriority = PriorityCombo.SelectedItem is ProcessPriorityPreference priority ? priority : ProcessPriorityPreference.AboveNormal,
             UseVendorAwareCpuSets = CpuSetsCheck.IsChecked == true,
             EnableNvidiaPersistence = NvidiaCheck.IsChecked == true,
+            UseMsfs2024FastLaunch = FastLaunchCheck.IsChecked == true,
+            FlushDnsCache = FlushDnsCheck.IsChecked == true,
+            DisableGameDvr = GameDvrCheck.IsChecked == true,
+            ClearStandbyMemory = StandbyMemoryCheck.IsChecked == true,
+            UseHighResolutionTimer = TimerResolutionCheck.IsChecked == true,
+            DisableFullscreenOptimizations = FullscreenOptimizationsCheck.IsChecked == true,
+            DisablePowerThrottling = PowerThrottlingCheck.IsChecked == true,
+            ApplyNetworkMemoryOptimizations = NetworkMemoryCheck.IsChecked == true,
             ContentCreatorMode = ContentCreatorCheck.IsChecked == true,
+            VrRuntime = VrRuntimeCombo.SelectedItem is VrRuntimePreference runtime ? runtime : VrRuntimePreference.None,
             LaunchTimeoutSeconds = timeout
-        }
+        },
+        CustomApplications = ReadCustomApplications()
     };
 
     private void ApplyOptionsToControls()
     {
+        _applyingConfig = true;
+        ProfileCombo.ItemsSource = Enum.GetValues<OptimizationProfile>();
+        ProfileCombo.SelectedItem = _config.Options.Profile;
         PowerPlanCheck.IsChecked = _config.Options.UseUltimatePowerPlan;
         PriorityCombo.ItemsSource = Enum.GetValues<ProcessPriorityPreference>();
         PriorityCombo.SelectedItem = _config.Options.ProcessPriority;
         CpuSetsCheck.IsChecked = _config.Options.UseVendorAwareCpuSets;
         NvidiaCheck.IsChecked = _config.Options.EnableNvidiaPersistence;
+        FastLaunchCheck.IsChecked = _config.Options.UseMsfs2024FastLaunch;
+        FlushDnsCheck.IsChecked = _config.Options.FlushDnsCache;
+        GameDvrCheck.IsChecked = _config.Options.DisableGameDvr;
+        StandbyMemoryCheck.IsChecked = _config.Options.ClearStandbyMemory;
+        TimerResolutionCheck.IsChecked = _config.Options.UseHighResolutionTimer;
+        FullscreenOptimizationsCheck.IsChecked = _config.Options.DisableFullscreenOptimizations;
+        PowerThrottlingCheck.IsChecked = _config.Options.DisablePowerThrottling;
+        NetworkMemoryCheck.IsChecked = _config.Options.ApplyNetworkMemoryOptimizations;
         ContentCreatorCheck.IsChecked = _config.Options.ContentCreatorMode;
+        VrRuntimeCombo.ItemsSource = Enum.GetValues<VrRuntimePreference>();
+        VrRuntimeCombo.SelectedItem = _config.Options.VrRuntime;
         ModeCombo.ItemsSource = Enum.GetValues<SessionMode>();
         ModeCombo.SelectedItem = _config.SessionMode;
         TimeoutBox.Text = _config.Options.LaunchTimeoutSeconds.ToString();
+        CustomKillBox.Text = string.Join(Environment.NewLine, _config.CustomApplications.Select(rule => rule.ProcessName));
+        CustomRestartBox.Text = string.Join(Environment.NewLine, _config.CustomApplications
+            .Where(rule => !string.IsNullOrWhiteSpace(rule.RestartExecutablePath))
+            .Select(rule => $"{rule.ProcessName}={rule.RestartExecutablePath}"));
+        _applyingConfig = false;
         UpdateModeDescription();
     }
 
@@ -283,6 +316,25 @@ public partial class MainWindow : Window
 
     private async void ScanButton_Click(object sender, RoutedEventArgs e) => await ScanSystemAsync();
 
+    private void SimulatorCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e) =>
+        UpdateFastLaunchAvailability();
+
+    private void UpdateFastLaunchAvailability()
+    {
+        if (FastLaunchCheck is null) return;
+        var isMsfs2024 = SimulatorCombo.SelectedItem is DetectedSimulator detected
+            && detected.Definition.Id is "msfs2024-steam" or "msfs2024-store";
+        FastLaunchCheck.IsEnabled = !_coordinator.IsRunning && isMsfs2024;
+    }
+
+    private async void SaveCustomButton_Click(object sender, RoutedEventArgs e)
+    {
+        _config.CustomApplications = ReadCustomApplications();
+        await JsonStore.SaveAtomicAsync(_paths.ConfigFile, _config);
+        AppendStatus($"Saved {_config.CustomApplications.Count} persistent custom application rule(s).");
+        await ScanSystemAsync();
+    }
+
     private async Task ScanSystemAsync()
     {
         ScanButton.IsEnabled = false;
@@ -291,7 +343,9 @@ public partial class MainWindow : Window
         AppendStatus("Scanning installed simulators, visible applications, and relevant running services…");
         try
         {
-            var result = await _scanner.ScanAsync();
+            var customApplications = ReadCustomApplications();
+            _config.CustomApplications = customApplications;
+            var result = await _scanner.ScanAsync(customApplications);
             _applications = result.Applications;
             _services = result.Services;
             SimulatorCombo.ItemsSource = result.Simulators;
@@ -336,14 +390,46 @@ public partial class MainWindow : Window
         UpdateModeDescription();
     }
 
+    private void ProfileCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (_applyingConfig || ProfileCombo.SelectedItem is not OptimizationProfile profile) return;
+        var defaults = new OptimizerOptions();
+        OptimizationProfiles.Apply(defaults, profile);
+        PowerPlanCheck.IsChecked = defaults.UseUltimatePowerPlan;
+        PriorityCombo.SelectedItem = defaults.ProcessPriority;
+        CpuSetsCheck.IsChecked = defaults.UseVendorAwareCpuSets;
+        NvidiaCheck.IsChecked = defaults.EnableNvidiaPersistence;
+        FastLaunchCheck.IsChecked = defaults.UseMsfs2024FastLaunch;
+        FlushDnsCheck.IsChecked = defaults.FlushDnsCache;
+        GameDvrCheck.IsChecked = defaults.DisableGameDvr;
+        StandbyMemoryCheck.IsChecked = defaults.ClearStandbyMemory;
+        TimerResolutionCheck.IsChecked = defaults.UseHighResolutionTimer;
+        FullscreenOptimizationsCheck.IsChecked = defaults.DisableFullscreenOptimizations;
+        PowerThrottlingCheck.IsChecked = defaults.DisablePowerThrottling;
+        NetworkMemoryCheck.IsChecked = defaults.ApplyNetworkMemoryOptimizations;
+        if (profile == OptimizationProfile.Standard)
+        {
+            foreach (var service in _services) service.Selected = false;
+            ServicesGrid.Items.Refresh();
+        }
+        ServicesGrid.IsEnabled = !_coordinator.IsRunning && profile == OptimizationProfile.Aggressive;
+        if (ModeCombo.SelectedItem is SessionMode.Automatic) SelectAllStoppableItems();
+        UpdateModeDescription();
+    }
+
     private void UpdateModeDescription()
     {
         if (ModeDescription is null) return;
+        var profile = ProfileCombo.SelectedItem is OptimizationProfile selected ? selected : OptimizationProfile.Standard;
         ModeDescription.Text = ModeCombo.SelectedItem is SessionMode.Automatic
             ? ContentCreatorCheck.IsChecked == true
-                ? "Automatic optimization is active; streaming, capture, audio-routing, and creator helper tools will remain running."
-                : "Automatically preselect every stoppable detected app and service, apply CPU settings, launch MSFS, and restore after exit."
-            : "Choose applications and services manually before starting the session.";
+                ? $"Automatic {profile} optimization is active; streaming, capture, audio-routing, and creator helper tools will remain running."
+                : profile == OptimizationProfile.Aggressive
+                    ? "Aggressive mode selects every safely restartable candidate and applies the stronger CPU/GPU defaults."
+                    : "Standard mode selects high and medium impact candidates while leaving lower-impact background items running."
+            : profile == OptimizationProfile.Aggressive
+                ? "Choose applications and services manually before starting the session. All changed service states are restored on exit."
+                : "Choose applications manually before starting the session. Service control is available only in Aggressive profile.";
     }
 
     private void ApplyModeSelection()
@@ -353,7 +439,10 @@ public partial class MainWindow : Window
 
     private void SelectAllStoppableItems()
     {
-        SessionSelectionPolicy.SelectAutomatic(_applications, _services, ContentCreatorCheck.IsChecked == true);
+        var profile = ProfileCombo.SelectedItem is OptimizationProfile selectedProfile
+            ? selectedProfile
+            : OptimizationProfile.Standard;
+        SessionSelectionPolicy.SelectAutomatic(_applications, _services, ContentCreatorCheck.IsChecked == true, profile);
         AppsGrid.Items.Refresh();
         ServicesGrid.Items.Refresh();
     }
@@ -363,6 +452,36 @@ public partial class MainWindow : Window
         SessionSelectionPolicy.Clear(_applications, _services);
         AppsGrid.Items.Refresh();
         ServicesGrid.Items.Refresh();
+    }
+
+    private List<CustomApplicationRule> ReadCustomApplications()
+    {
+        if (CustomKillBox is null || CustomRestartBox is null) return _config.CustomApplications;
+        var restartPaths = SplitLines(CustomRestartBox.Text)
+            .Select(line => line.Split('=', 2, StringSplitOptions.TrimEntries))
+            .Where(parts => parts.Length == 2 && !string.IsNullOrWhiteSpace(parts[0]))
+            .GroupBy(parts => NormalizeProcessName(parts[0]), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Last()[1], StringComparer.OrdinalIgnoreCase);
+
+        return SplitLines(CustomKillBox.Text)
+            .Select(NormalizeProcessName)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(name => new CustomApplicationRule
+            {
+                ProcessName = name,
+                RestartExecutablePath = restartPaths.GetValueOrDefault(name, "")
+            })
+            .ToList();
+    }
+
+    private static IEnumerable<string> SplitLines(string value) =>
+        value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private static string NormalizeProcessName(string value)
+    {
+        var name = value.Trim();
+        return name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? name[..^4] : name;
     }
 
     private async Task ContinuePendingLaunchAsync()
@@ -380,7 +499,8 @@ public partial class MainWindow : Window
             {
                 SelectedSimulatorId = pending.SimulatorId,
                 SessionMode = pending.SessionMode,
-                Options = pending.Options
+                Options = pending.Options,
+                CustomApplications = pending.CustomApplications.ToList()
             };
             ApplyOptionsToControls();
             SimulatorCombo.SelectedItem = SimulatorCombo.Items.Cast<DetectedSimulator>()
@@ -418,9 +538,29 @@ public partial class MainWindow : Window
         RestoreButton.IsEnabled = !running && _coordinator.HasRecoveryJournal;
         SimulatorCombo.IsEnabled = !running;
         AppsGrid.IsEnabled = !running;
-        ServicesGrid.IsEnabled = !running;
+        ServicesGrid.IsEnabled = !running && ProfileCombo.SelectedItem is OptimizationProfile.Aggressive;
         ScanButton.IsEnabled = !running;
         ModeCombo.IsEnabled = !running;
+        ProfileCombo.IsEnabled = !running;
+        VrRuntimeCombo.IsEnabled = !running;
+        PowerPlanCheck.IsEnabled = !running;
+        PriorityCombo.IsEnabled = !running;
+        CpuSetsCheck.IsEnabled = !running;
+        NvidiaCheck.IsEnabled = !running;
+        FastLaunchCheck.IsEnabled = !running
+            && SimulatorCombo.SelectedItem is DetectedSimulator detected
+            && detected.Definition.Id is "msfs2024-steam" or "msfs2024-store";
+        FlushDnsCheck.IsEnabled = !running;
+        GameDvrCheck.IsEnabled = !running;
+        StandbyMemoryCheck.IsEnabled = !running;
+        TimerResolutionCheck.IsEnabled = !running;
+        FullscreenOptimizationsCheck.IsEnabled = !running;
+        PowerThrottlingCheck.IsEnabled = !running;
+        NetworkMemoryCheck.IsEnabled = !running;
+        TimeoutBox.IsEnabled = !running;
+        CustomKillBox.IsEnabled = !running;
+        CustomRestartBox.IsEnabled = !running;
+        SaveCustomButton.IsEnabled = !running;
         ContentCreatorCheck.IsEnabled = !running;
         if (!running) SetStateDisplay("READY", "GreenBrush");
     }
@@ -445,5 +585,28 @@ public partial class MainWindow : Window
             LogBox.AppendText($"[{DateTime.Now:HH:mm:ss}] {message}{Environment.NewLine}");
             LogBox.ScrollToEnd();
         });
+    }
+
+    private void UpdatePipeline(SessionProgress progress)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            var lamps = new[] { Stage1Lamp, Stage2Lamp, Stage3Lamp, Stage4Lamp, Stage5Lamp };
+            var labels = new[] { Stage1Label, Stage2Label, Stage3Label, Stage4Label, Stage5Label };
+            var current = (int)progress.Stage - 1;
+            for (var index = 0; index < lamps.Length; index++)
+            {
+                lamps[index].Fill = (Brush)FindResource(index < current ? "GreenBrush" : index == current ? "CyanBrush" : "BorderBrush");
+                labels[index].Foreground = (Brush)FindResource(index <= current ? "TextBrush" : "MutedTextBrush");
+            }
+            PipelineDetail.Text = $"STAGE {(int)progress.Stage}/5  /  {progress.Title}  /  {progress.Detail}";
+        });
+    }
+
+    private void CompletePipeline()
+    {
+        var lamps = new[] { Stage1Lamp, Stage2Lamp, Stage3Lamp, Stage4Lamp, Stage5Lamp };
+        foreach (var lamp in lamps) lamp.Fill = (Brush)FindResource("GreenBrush");
+        PipelineDetail.Text = "PIPELINE COMPLETE  /  ORIGINAL SYSTEM STATE RESTORED";
     }
 }

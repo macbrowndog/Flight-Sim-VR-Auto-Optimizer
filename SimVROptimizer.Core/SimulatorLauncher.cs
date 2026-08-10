@@ -1,10 +1,12 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 
 namespace SimVROptimizer.Core;
 
 public sealed class SimulatorLauncher
 {
+    private const string AppsFolderPrefix = "shell:AppsFolder\\";
     private readonly FileLogger _logger;
     private readonly CpuOptimizer _cpuOptimizer = new();
     private readonly Dictionary<int, CpuOptimizationScope> _cpuScopes = [];
@@ -22,12 +24,17 @@ public sealed class SimulatorLauncher
         foreach (var existingProcess in existingProcesses) existingProcess.Dispose();
         var launchedAfterUtc = DateTime.UtcNow.AddSeconds(-2);
 
+        var plan = CreateLaunchPlan(simulator, options);
+        var fastLaunchNote = plan.Arguments.Contains("-FastLaunch", StringComparison.OrdinalIgnoreCase)
+            || plan.Target.Contains("-FastLaunch", StringComparison.OrdinalIgnoreCase)
+            ? " with -FastLaunch"
+            : "";
         await ReportAsync(options.DryRun
-            ? $"Dry-run: would launch {simulator.Name}."
-            : $"Launching {simulator.Name}.", cancellationToken);
+            ? $"Dry-run: would launch {simulator.Name}{fastLaunchNote}."
+            : $"Launching {simulator.Name}{fastLaunchNote}.", cancellationToken);
         if (options.DryRun) return null;
 
-        Start(simulator);
+        Start(plan);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Clamp(options.LaunchTimeoutSeconds, 30, 900)));
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
 
@@ -84,20 +91,55 @@ public sealed class SimulatorLauncher
         }
     }
 
-    private static void Start(SimulatorDefinition simulator)
+    public static SimulatorLaunchPlan CreateLaunchPlan(SimulatorDefinition simulator, OptimizerOptions options)
     {
+        var useFastLaunch = options.UseMsfs2024FastLaunch
+            && simulator.Id is "msfs2024-steam" or "msfs2024-store";
+        if (useFastLaunch && simulator.Id == "msfs2024-steam")
+            return new SimulatorLaunchPlan(simulator.LaunchKind, simulator.LaunchTarget + "//-FastLaunch/", "");
+        if (useFastLaunch && simulator.Id == "msfs2024-store")
+            return new SimulatorLaunchPlan(simulator.LaunchKind, simulator.LaunchTarget, "-FastLaunch");
+        return new SimulatorLaunchPlan(simulator.LaunchKind, simulator.LaunchTarget, simulator.Arguments);
+    }
+
+    private static void Start(SimulatorLaunchPlan plan)
+    {
+        if (plan.Kind == LaunchKind.Uri
+            && plan.Target.StartsWith(AppsFolderPrefix, StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(plan.Arguments))
+        {
+            ActivatePackagedApplication(plan.Target[AppsFolderPrefix.Length..], plan.Arguments);
+            return;
+        }
+
         ProcessStartInfo startInfo;
-        if (simulator.LaunchKind == LaunchKind.Uri && simulator.LaunchTarget.StartsWith("shell:", StringComparison.OrdinalIgnoreCase))
+        if (plan.Kind == LaunchKind.Uri && plan.Target.StartsWith("shell:", StringComparison.OrdinalIgnoreCase))
         {
             startInfo = new ProcessStartInfo("explorer.exe") { UseShellExecute = true };
-            startInfo.ArgumentList.Add(simulator.LaunchTarget);
+            startInfo.ArgumentList.Add(plan.Target);
         }
         else
         {
-            startInfo = new ProcessStartInfo(simulator.LaunchTarget) { UseShellExecute = true };
-            if (!string.IsNullOrWhiteSpace(simulator.Arguments)) startInfo.Arguments = simulator.Arguments;
+            startInfo = new ProcessStartInfo(plan.Target) { UseShellExecute = true };
+            if (!string.IsNullOrWhiteSpace(plan.Arguments)) startInfo.Arguments = plan.Arguments;
         }
         Process.Start(startInfo);
+    }
+
+    private static void ActivatePackagedApplication(string appUserModelId, string arguments)
+    {
+        var managerType = Type.GetTypeFromCLSID(new Guid("45BA127D-10A8-46EA-8AB7-56EA9078943C"), throwOnError: true)
+            ?? throw new InvalidOperationException("Windows packaged-app activation is unavailable.");
+        var manager = (IApplicationActivationManager)Activator.CreateInstance(managerType)!;
+        try
+        {
+            var result = manager.ActivateApplication(appUserModelId, arguments, ActivateOptions.None, out _);
+            if (result < 0) Marshal.ThrowExceptionForHR(result);
+        }
+        finally
+        {
+            Marshal.FinalReleaseComObject(manager);
+        }
     }
 
     private async Task ReportAsync(string message, CancellationToken cancellationToken)
@@ -105,4 +147,31 @@ public sealed class SimulatorLauncher
         StatusChanged?.Invoke(message);
         await _logger.WriteAsync(message, cancellationToken).ConfigureAwait(false);
     }
+}
+
+public sealed record SimulatorLaunchPlan(LaunchKind Kind, string Target, string Arguments);
+
+[ComImport]
+[Guid("2E941141-7F97-4756-BA1D-9DECDE894A3D")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IApplicationActivationManager
+{
+    [PreserveSig]
+    int ActivateApplication(
+        [MarshalAs(UnmanagedType.LPWStr)] string appUserModelId,
+        [MarshalAs(UnmanagedType.LPWStr)] string arguments,
+        ActivateOptions options,
+        out uint processId);
+
+    [PreserveSig]
+    int ActivateForFile(IntPtr appUserModelId, IntPtr itemArray, IntPtr verb, out uint processId);
+
+    [PreserveSig]
+    int ActivateForProtocol(IntPtr appUserModelId, IntPtr itemArray, out uint processId);
+}
+
+[Flags]
+internal enum ActivateOptions
+{
+    None = 0
 }

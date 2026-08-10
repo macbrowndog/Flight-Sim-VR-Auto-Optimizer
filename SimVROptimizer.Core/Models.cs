@@ -20,12 +20,38 @@ public enum LaunchKind
 public sealed class OptimizerOptions
 {
     public bool DryRun { get; set; }
+    public OptimizationProfile Profile { get; set; } = OptimizationProfile.Standard;
     public bool UseUltimatePowerPlan { get; set; } = true;
     public bool EnableNvidiaPersistence { get; set; }
+    public bool UseMsfs2024FastLaunch { get; set; } = true;
+    public bool FlushDnsCache { get; set; } = true;
+    public bool DisableGameDvr { get; set; }
+    public bool ClearStandbyMemory { get; set; }
+    public bool UseHighResolutionTimer { get; set; }
+    public bool DisableFullscreenOptimizations { get; set; }
+    public bool DisablePowerThrottling { get; set; }
+    public bool ApplyNetworkMemoryOptimizations { get; set; }
     public ProcessPriorityPreference ProcessPriority { get; set; } = ProcessPriorityPreference.AboveNormal;
     public bool UseVendorAwareCpuSets { get; set; }
     public bool ContentCreatorMode { get; set; }
+    public VrRuntimePreference VrRuntime { get; set; } = VrRuntimePreference.None;
     public int LaunchTimeoutSeconds { get; set; } = 180;
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum OptimizationProfile
+{
+    Standard,
+    Aggressive
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum VrRuntimePreference
+{
+    None,
+    VirtualDesktop,
+    PimaxPlay,
+    SteamVR
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
@@ -42,6 +68,18 @@ public enum SessionMode
     Manual,
     Automatic
 }
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum SessionStage
+{
+    Prepare = 1,
+    Optimize = 2,
+    VrRuntime = 3,
+    Simulator = 4,
+    Restore = 5
+}
+
+public sealed record SessionProgress(SessionStage Stage, string Title, string Detail);
 
 public sealed record CpuSetDescriptor(
     uint Id,
@@ -89,6 +127,7 @@ public sealed class RunningAppCandidate
     public string? ExecutablePath { get; init; }
     public required string RestartCommand { get; init; }
     public required bool CanStop { get; init; }
+    public bool IsCustom { get; init; }
     public string RestartSupport => RestartCommand.StartsWith("none:", StringComparison.OrdinalIgnoreCase) ? "Manual" : "Automatic";
     public bool Selected { get; set; }
 }
@@ -111,14 +150,17 @@ public static class SessionSelectionPolicy
     public static void SelectAutomatic(
         IEnumerable<RunningAppCandidate> applications,
         IEnumerable<ServiceCandidate> services,
-        bool contentCreatorMode = false)
+        bool contentCreatorMode = false,
+        OptimizationProfile profile = OptimizationProfile.Standard)
     {
         foreach (var application in applications)
             application.Selected = application.CanStop
                 && application.RestartSupport == "Automatic"
+                && (profile == OptimizationProfile.Aggressive || application.IsCustom || application.Impact is ImpactLevel.High or ImpactLevel.Medium)
                 && !(contentCreatorMode && IsContentCreatorApplication(application));
         foreach (var service in services)
-            service.Selected = service.CanStop
+            service.Selected = profile == OptimizationProfile.Aggressive
+                && service.CanStop
                 && !(contentCreatorMode && IsContentCreatorService(service));
     }
 
@@ -164,6 +206,13 @@ public sealed class AppConfig
     public string? SelectedSimulatorId { get; set; }
     public SessionMode SessionMode { get; set; } = SessionMode.Manual;
     public OptimizerOptions Options { get; set; } = new();
+    public List<CustomApplicationRule> CustomApplications { get; set; } = [];
+}
+
+public sealed class CustomApplicationRule
+{
+    public string ProcessName { get; set; } = "";
+    public string RestartExecutablePath { get; set; } = "";
 }
 
 public sealed class PendingLaunch
@@ -173,6 +222,7 @@ public sealed class PendingLaunch
     public required OptimizerOptions Options { get; init; }
     public IReadOnlyList<string> ProcessNames { get; init; } = [];
     public IReadOnlyList<string> ServiceNames { get; init; } = [];
+    public IReadOnlyList<CustomApplicationRule> CustomApplications { get; init; } = [];
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
@@ -182,7 +232,8 @@ public enum MutationKind
     CreatedPowerPlan,
     Service,
     NvidiaPersistence,
-    Process
+    Process,
+    RegistryValue
 }
 
 public sealed record StateMutation(

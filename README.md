@@ -4,27 +4,38 @@ VR Auto-Optimizer is a .NET 8 WPF application for launching selected Windows fli
 
 It scans the local PC, explains the likely MSFS impact of running applications and services, applies selected performance settings, launches the simulator, monitors the exact new simulator process, and restores recorded system state when the flight ends.
 
+> [!IMPORTANT]
+> **Run VR Auto-Optimizer as Administrator when using the Aggressive profile.** Aggressive features require elevated Windows permissions, including stopping and restarting services, changing protected registry values, applying system-level network and memory tuning, and restoring those settings afterward. Right-click `SimVROptimizer.exe` and select **Run as administrator**, then approve the Windows User Account Control prompt. Without administrator access, service stopping and other Aggressive operations may fail or be skipped.
+
 ## Features
 
-- Automatic detection of eight MSFS, DCS World, and X-Plane configurations
+- Automatic detection of nine MSFS, DCS World, X-Plane, and IL-2 configurations
+- Standard and Aggressive optimization profiles with editable granular controls
 - Manual checkbox control or an Automatic session workflow
+- Configurable Virtual Desktop, Pimax Play, SteamVR, or no-runtime launching
+- Optional `-FastLaunch` startup for Microsoft Flight Simulator 2024 on both Steam and Microsoft Store
+- Live five-stage Prepare, Optimize, VR Runtime, Simulator, and Restore pipeline
+- Persistent custom process kill and executable restart rules
 - Automatic application and service restoration through a transaction journal
 - CPU vendor/model and topology detection with AMD X3D-safe scheduling
 - Selectable simulator priority and optional Intel hybrid performance-core CPU Sets
 - Temporary Ultimate Performance power plan and NVIDIA persistence control
+- Standard profile includes DNS flush, High process priority, and vendor-aware CPU Sets; service stopping is reserved for Aggressive mode
+- Aggressive profile adds reversible Game Bar/Game DVR, fullscreen-optimization, timer-resolution, process power-throttling, and multimedia/network tuning
+- Optional one-time standby-memory clearing in Aggressive mode
 - Background application and service impact guidance
 - Protected Steam, Xbox/MSFS, VR/OpenXR, networking, security, and flight-control components
 - Content Creator Mode for OBS, Streamlabs, Stream Deck, NVIDIA Broadcast, Voicemeeter, Elgato, and other capture tools
-- Aviation instrument-themed dark interface with live session status and logging
+- Aviation instrument-themed dark interface with live session status and rotating logs
 - Interrupted-session recovery on the next application start
 
 ## Install
 
-1. Download `VR-Auto-Optimizer-1.6.1-win-x64.zip` from [Releases](https://github.com/macbrowndog/Flight-Sim-VR-Auto-Optimizer/releases/latest).
+1. Download the latest Windows x64 package from [Releases](https://github.com/macbrowndog/Flight-Sim-VR-Auto-Optimizer/releases/latest).
 2. Extract the entire ZIP to a writable folder.
 3. Install the [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/8.0) if it is not already installed.
-4. Run `SimVROptimizer.exe`, select a detected simulator and session workflow, then choose **Start Flight Session**.
-5. Approve the Windows administrator prompt. Close the simulator normally to trigger restoration.
+4. For Standard use, run `SimVROptimizer.exe` normally. For Aggressive use, right-click it and select **Run as administrator**.
+5. Approve the Windows administrator prompt, select a detected simulator and session workflow, then choose **Start Flight Session**. Close the simulator normally to trigger restoration.
 
 ## Safety model
 
@@ -38,7 +49,8 @@ It scans the local PC, explains the likely MSFS impact of running applications a
 - The optimizer tracks a newly created simulator PID. It does not attach to a matching process that was already running.
 - CPU topology is detected through Windows CPU Set APIs. The scheduler remains the default; an advanced opt-in can constrain Intel hybrid sessions to the highest performance efficiency class.
 - Selected applications can be stopped for the session. Restart support is shown before selection and simulator launchers/VR runtimes are protected.
-- Automatic mode selects every safely restartable detected application and stoppable service, launches the selected simulator, monitors its exact new process, and restores the recorded state when it exits.
+- Standard Automatic mode selects safely restartable high- and medium-impact candidates. Aggressive Automatic mode includes all safely restartable candidates. Both restore the recorded state after the simulator exits.
+- A VR runtime is closed after the session only when the optimizer started it; a runtime that was already running is left running.
 
 No program can guarantee recovery after disk corruption or an operating-system failure. If restoration is incomplete, the journal is retained and the application reports the failed operation instead of claiming success.
 
@@ -48,6 +60,7 @@ No program can guarantee recovery after disk corruption or an operating-system f
 - Microsoft Flight Simulator 2020 — Steam and Microsoft Store
 - DCS World — Steam and standalone
 - X-Plane 12 — Steam and standalone
+- IL-2 Sturmovik: Battle of Stalingrad — Steam
 
 The application scans Steam library manifests, Microsoft Store packages, DCS registry installation paths, and ready drive roots for a standalone X-Plane 12 installation. Only detected simulators are offered in the launch selector.
 
@@ -66,9 +79,17 @@ Additional simulator configurations may be added in future releases.
 
 The scan presents an impact level and explanation for each candidate. Manual mode leaves all selections under user control. Automatic mode selects all applications with a reliable restart command and all stoppable services. Items without a reliable restart command remain available for manual selection; Windows download, simulator-launcher, VR-runtime, Xbox Gaming Services, and common flight-control services are protected.
 
+Standard profile limits Automatic application selection to high- and medium-impact items and uses Ultimate Performance, High simulator priority, vendor-aware CPU Sets, NVIDIA persistence, and a DNS flush. It does not stop services. Aggressive profile includes low- and unknown-impact applications, enables service selection (including approved SysMain, Print Spooler, iCloud and updater candidates), and adds the advanced session tuning shown in the UI. Every profile toggle remains editable before launch.
+
+**Administrator mode is required for Aggressive operation.** This includes stopping services such as SysMain, Print Spooler, iCloud, CCleaner and updater services. It also includes protected registry changes, timer and memory operations, network tuning, and reliable restoration. If the title bar does not show administrator access, close the app and restart it using **Run as administrator** before beginning an Aggressive session.
+
+Persistent Aggressive changes are written to the recovery journal before they are applied and restored in reverse order after the simulator exits. The 0.5 ms timer request is released and simulator power-throttling state is restored. DNS flushing and standby-list clearing are one-time operations rather than persistent settings; their caches naturally repopulate. NVIDIA persistence is supported and restored, but the driver-profile “Prefer maximum performance” setting is not forced because reliable per-profile restoration requires a dedicated NVIDIA NVAPI integration.
+
+The Custom Apps tab stores process names in `config.json`. Optional restart entries use `process=full executable path`; matching running processes appear as custom candidates on every scan.
+
 Content Creator Mode can be enabled in Session options. In Automatic mode it keeps OBS, Streamlabs, Twitch Studio, Discord, Stream Deck, NVIDIA Broadcast, Voicemeeter, Elgato, XSplit, vMix, TikTok LIVE Studio, Meld Studio, NDI, Blackmagic, AJA, and matching helper services running. Manual mode remains fully user-controlled.
 
-The service and NVIDIA options are off by default. Administrator access is requested only when starting a real session or recovering one.
+Service stopping is available only in Aggressive mode. Administrator access is requested only when starting a real session or recovering one.
 
 Impact guidance is based primarily on the current [Microsoft Flight Simulator performance guidance](https://flightsimulator.zendesk.com/hc/en-us/articles/360016142680-How-to-improve-the-performance), [MSFS crash troubleshooting guidance](https://flightsimulator.zendesk.com/hc/en-us/articles/4406280399250-Basic-Troubleshooting-How-to-troubleshoot-crashing-CTDs-issues), and Microsoft's recommendation to [pause OneDrive synchronization](https://support.microsoft.com/en-us/onedrive/how-to-pause-and-resume-onedrive-sync) when it is consuming resources. A listed item is a candidate, not proof that it is harming a particular PC; confirm with measurements and change one item at a time.
 
@@ -81,13 +102,14 @@ config.json
 active-session.json   # present only during an unfinished real session
 pending-launch.json   # temporary UAC handoff; removed when the elevated session continues
 optimizer.log
+optimizer.log.1 ... optimizer.log.5   # rotated history
 ```
 
 ## Requirements
 
 - Windows 10 or Windows 11, x64
 - .NET 8 Desktop Runtime
-- Administrator access for real optimization and recovery
+- Administrator access for Aggressive optimization, service stopping, system-level tuning, and recovery
 
 ## Important notice
 
@@ -105,6 +127,27 @@ The test runner has no third-party test framework dependency. It covers output p
 ## License
 
 Licensed under the [MIT License](LICENSE).
+
+## Release notes — 1.8.0
+
+- Added Standard and Aggressive optimization profiles with granular controls.
+- Reserved all service stopping for Aggressive mode and emphasized its administrator requirement.
+- Added reversible Game Bar/Game DVR, fullscreen, timer-resolution, power-throttling, network, and multimedia tuning.
+- Added optional standby-memory clearing and DNS cache flushing.
+- Fixed running-service detection on Windows and expanded iCloud, Google updater, CCleaner, SysMain, and Print Spooler coverage.
+- Added `-FastLaunch` for Microsoft Flight Simulator 2024 on Steam and Microsoft Store.
+- Expanded simulator, VR-runtime, five-stage pipeline, log-rotation, and custom process-list support.
+- Expanded automated validation to 16 passing tests.
+
+## Release notes — 1.7.0
+
+- Added a multi-resolution aviation application icon to the Windows executable and window title bar.
+- Added Standard and Aggressive profiles while retaining granular power, priority, CPU Set, NVIDIA, application, and service controls.
+- Added optional Virtual Desktop, Pimax Play, and SteamVR startup with session-aware shutdown only when launched by the optimizer.
+- Added a live five-stage progress pipeline from preparation through restoration.
+- Added 2 MB log rotation with five retained history files.
+- Added persistent custom process kill and executable restart rules.
+- Added IL-2 Sturmovik: Battle of Stalingrad on Steam as the ninth detected simulator configuration.
 
 ## Release notes — 1.6.1
 
