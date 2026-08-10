@@ -128,6 +128,16 @@ The test runner has no third-party test framework dependency. It covers output p
 
 Licensed under the [MIT License](LICENSE).
 
+## Release notes — 1.8.1
+
+- Fixed Pimax Play launch detection for the current `PimaxClient\pimaxui\PimaxClient.exe` installation layout, with legacy locations retained as fallbacks.
+- Fixed bright Windows selection colours in application and service tables so selected rows remain readable in the aviation dark theme.
+- Protected Microsoft Defender and Windows security services from session stopping.
+- Made an individual service access-denied response non-fatal so other optimizations and the simulator launch can continue safely.
+- Enabled the Windows token privilege required for aggressive standby-memory clearing.
+- Protected Xbox/Store launch, GameInput, Pimax, NVIDIA, Tobii, Navigraph, MOZA, motion-rig, and VPN runtime components from Aggressive automatic stopping.
+- Prevented direct executable relaunches of packaged WindowsApps/SystemApps components, avoiding missing packaged-runtime DLL errors during restoration.
+
 ## Release notes — 1.8.0
 
 - Added Standard and Aggressive optimization profiles with granular controls.

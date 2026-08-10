@@ -7,6 +7,9 @@ var tests = new (string Name, Func<Task> Run)[]
     ("NVIDIA state parser", TestNvidiaParserAsync),
     ("Running service parser", TestRunningServiceParserAsync),
     ("Impact service scan", TestImpactServiceScanAsync),
+    ("Critical runtime protection rules", TestCriticalRuntimeProtectionAsync),
+    ("Packaged application restart safety", TestPackagedApplicationRestartSafetyAsync),
+    ("Denied service stop is non-fatal", TestDeniedServiceStopAsync),
     ("CPU topology scan", TestCpuTopologyAsync),
     ("Optimization profiles", TestOptimizationProfilesAsync),
     ("Automatic selection policy", TestAutomaticSelectionPolicyAsync),
@@ -75,18 +78,69 @@ static async Task TestImpactServiceScanAsync()
     var commands = new FakeCommandRunner
     {
         Handler = (file, args) => file == "sc.exe"
-            ? Ok("SERVICE_NAME: NahimicService\r\nSERVICE_NAME: BITS\r\nSERVICE_NAME: GoogleUpdaterService145.0.1\r\nSERVICE_NAME: Apple Mobile Device Service\r\nSERVICE_NAME: DiagTrack\r\nSERVICE_NAME: UnrelatedService\r\n")
+            ? Ok("SERVICE_NAME: NahimicService\r\nSERVICE_NAME: BITS\r\nSERVICE_NAME: GoogleUpdaterService145.0.1\r\nSERVICE_NAME: Apple Mobile Device Service\r\nSERVICE_NAME: DiagTrack\r\nSERVICE_NAME: MDCoreSvc\r\nSERVICE_NAME: GameInputRedistService\r\nSERVICE_NAME: NvContainerLocalSystem\r\nSERVICE_NAME: PiServiceLauncher\r\nSERVICE_NAME: PrivateInternetAccessService\r\nSERVICE_NAME: UnrelatedService\r\n")
             : Ok()
     };
     var result = await new SystemScanner(commands).ScanAsync();
     True(commands.Calls.Any(call => call.File == "sc.exe" && string.Join(" ", call.Args) == "query type= service"));
     True(result.Applications.All(application => !string.IsNullOrWhiteSpace(application.DisplayName)));
-    Equal(5, result.Services.Count);
+    Equal(10, result.Services.Count);
     True(result.Services.Single(service => service.ServiceName == "NahimicService").CanStop);
     True(!result.Services.Single(service => service.ServiceName == "BITS").CanStop);
     Equal(ImpactLevel.Medium, result.Services.Single(service => service.ServiceName.StartsWith("GoogleUpdater", StringComparison.Ordinal)).Impact);
     True(result.Services.Single(service => service.ServiceName == "Apple Mobile Device Service").CanStop);
     Equal(ImpactLevel.Low, result.Services.Single(service => service.ServiceName == "DiagTrack").Impact);
+    True(!result.Services.Single(service => service.ServiceName == "MDCoreSvc").CanStop);
+    True(!result.Services.Single(service => service.ServiceName == "GameInputRedistService").CanStop);
+    True(!result.Services.Single(service => service.ServiceName == "NvContainerLocalSystem").CanStop);
+    True(!result.Services.Single(service => service.ServiceName == "PiServiceLauncher").CanStop);
+    True(!result.Services.Single(service => service.ServiceName == "PrivateInternetAccessService").CanStop);
+}
+
+static Task TestCriticalRuntimeProtectionAsync()
+{
+    var method = typeof(SystemScanner).GetMethod("IsProtectedApplication", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+        ?? throw new InvalidOperationException("Protection rule method was not found.");
+    foreach (var processName in new[] { "GamingServices", "GameInput", "TextInputHost", "nvcontainer", "vrss_gaze_provider", "TobiiPlatformRuntime", "Navigraph", "Navigraph Simlink", "MOZA Cockpit", "SimRacingStudio", "pia-service" })
+        True((bool)(method.Invoke(null, [processName]) ?? false));
+    True(!(bool)(method.Invoke(null, ["CCleaner64"]) ?? true));
+    return Task.CompletedTask;
+}
+
+static Task TestPackagedApplicationRestartSafetyAsync()
+{
+    True(!ApplicationRestartPolicy.CanLaunchDirectly(@"C:\Program Files\WindowsApps\MicrosoftWindows.Client.WebExperience_1.0_x64__cw5n1h2txyewy\Widgets.exe"));
+    True(!ApplicationRestartPolicy.CanLaunchDirectly(@"C:\Windows\SystemApps\Microsoft.Windows.Search_cw5n1h2txyewy\SearchHost.exe"));
+    True(ApplicationRestartPolicy.CanLaunchDirectly(@"C:\Program Files\CCleaner\CCleaner64.exe"));
+
+    var resolver = typeof(SystemScanner).GetMethod("ResolveRestartCommand", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+        ?? throw new InvalidOperationException("Restart resolver was not found.");
+    Equal("none:", (string?)resolver.Invoke(null, ["Widgets", @"C:\Program Files\WindowsApps\MicrosoftWindows.Client.WebExperience_1.0_x64__cw5n1h2txyewy\Widgets.exe"]));
+    Equal(@"shell:shell:AppsFolder\Microsoft.YourPhone_8wekyb3d8bbwe!App", (string?)resolver.Invoke(null, ["PhoneExperienceHost", @"C:\Program Files\WindowsApps\Microsoft.YourPhone_1.0_x64__8wekyb3d8bbwe\PhoneExperienceHost.exe"]));
+    return Task.CompletedTask;
+}
+
+static async Task TestDeniedServiceStopAsync()
+{
+    var fixture = CreateFixture();
+    fixture.Commands.Handler = (file, args) =>
+    {
+        if (file != "sc.exe") return Ok();
+        if (args.FirstOrDefault() == "query") return Ok("STATE : 4 RUNNING");
+        if (args.FirstOrDefault() == "stop") return new CommandResult(5, "[SC] OpenService FAILED 5: Access is denied.", "");
+        return Ok();
+    };
+    var service = new ServiceCandidate { ServiceName = "ProtectedTest", DisplayName = "Protected test", Impact = ImpactLevel.Unknown, Reason = "test", CanStop = true, Selected = true };
+    await fixture.Optimizer.BeginAsync("Test Sim", new OptimizerOptions
+    {
+        Profile = OptimizationProfile.Aggressive,
+        UseUltimatePowerPlan = false,
+        EnableNvidiaPersistence = false,
+        FlushDnsCache = false
+    }, [], [service], CancellationToken.None);
+    var journal = await JsonStore.LoadRequiredAsync<SessionJournal>(fixture.Paths.JournalFile);
+    Equal(0, journal.Mutations.Count);
+    await fixture.Optimizer.RestoreAsync();
 }
 
 static Task TestCpuTopologyAsync()
