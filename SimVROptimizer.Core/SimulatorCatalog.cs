@@ -13,8 +13,8 @@ public static class SimulatorCatalog
         new("il2-sturmovik-steam", "IL-2 Sturmovik: Battle of Stalingrad (Steam)", ["Il-2"], LaunchKind.Uri, "steam://run/307960")
     ];
 
-    // Seven catalog entries plus the dynamically resolved DCS and X-Plane standalone targets.
-    public static int SupportedConfigurationCount => All.Count + 2;
+    // Seven catalog entries plus dynamically resolved DCS, X-Plane, and IL-2 Korea standalone targets.
+    public static int SupportedConfigurationCount => All.Count + 3;
 
     public static SimulatorDefinition? Find(string? id) =>
         All.FirstOrDefault(item => string.Equals(item.Id, id, StringComparison.OrdinalIgnoreCase));

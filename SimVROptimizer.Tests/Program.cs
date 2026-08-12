@@ -13,8 +13,11 @@ var tests = new (string Name, Func<Task> Run)[]
     ("CPU topology scan", TestCpuTopologyAsync),
     ("Optimization profiles", TestOptimizationProfilesAsync),
     ("Automatic selection policy", TestAutomaticSelectionPolicyAsync),
+    ("Selection state notification", TestSelectionStateNotificationAsync),
+    ("Saved selection preferences", TestSavedSelectionPreferencesAsync),
     ("Persistent custom application rule", TestCustomApplicationRuleAsync),
-    ("Nine simulator configurations", TestSimulatorCatalogAsync),
+    ("Ten simulator configurations", TestSimulatorCatalogAsync),
+    ("IL-2 Korea standalone launcher resolution", TestIl2KoreaLauncherResolutionAsync),
     ("MSFS 2024 FastLaunch plans", TestMsfs2024FastLaunchAsync),
     ("Log rotation", TestLogRotationAsync),
     ("Pending launch roundtrip", TestPendingLaunchRoundtripAsync),
@@ -101,7 +104,7 @@ static Task TestCriticalRuntimeProtectionAsync()
 {
     var method = typeof(SystemScanner).GetMethod("IsProtectedApplication", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
         ?? throw new InvalidOperationException("Protection rule method was not found.");
-    foreach (var processName in new[] { "GamingServices", "GameInput", "TextInputHost", "nvcontainer", "vrss_gaze_provider", "TobiiPlatformRuntime", "Navigraph", "Navigraph Simlink", "MOZA Cockpit", "SimRacingStudio", "pia-service" })
+    foreach (var processName in new[] { "GamingServices", "GameInput", "TextInputHost", "nvcontainer", "vrss_gaze_provider", "TobiiPlatformRuntime", "Navigraph", "Navigraph Simlink", "MOZA Cockpit", "SimRacingStudio", "pia-service", "MSFS_AutoFPS", "MSFS2024_AutoFPS_by_kayJay" })
         True((bool)(method.Invoke(null, [processName]) ?? false));
     True(!(bool)(method.Invoke(null, ["CCleaner64"]) ?? true));
     return Task.CompletedTask;
@@ -233,9 +236,117 @@ static async Task TestCustomApplicationRuleAsync()
 
 static Task TestSimulatorCatalogAsync()
 {
-    Equal(9, SimulatorCatalog.SupportedConfigurationCount);
+    Equal(10, SimulatorCatalog.SupportedConfigurationCount);
     True(SimulatorCatalog.Find("il2-sturmovik-steam") is not null);
     Equal("il2-sturmovik-steam", SimulatorCatalog.SteamByAppId["307960"].Id);
+    return Task.CompletedTask;
+}
+
+static Task TestSelectionStateNotificationAsync()
+{
+    var application = new RunningAppCandidate
+    {
+        ProcessName = "SelectionTest",
+        DisplayName = "Selection test",
+        Impact = ImpactLevel.Low,
+        Reason = "test",
+        InstanceCount = 1,
+        MemoryMb = 1,
+        RestartCommand = "exe:C:\\selection-test.exe",
+        CanStop = true
+    };
+    var changes = 0;
+    application.PropertyChanged += (_, args) =>
+    {
+        if (args.PropertyName == nameof(RunningAppCandidate.Selected)) changes++;
+    };
+
+    application.Selected = true;
+    application.Selected = true;
+    True(application.Selected);
+    Equal(1, changes);
+    return Task.CompletedTask;
+}
+
+static async Task TestSavedSelectionPreferencesAsync()
+{
+    var application = new RunningAppCandidate
+    {
+        ProcessName = "ExampleApp",
+        DisplayName = "Example app",
+        Impact = ImpactLevel.Low,
+        Reason = "test",
+        InstanceCount = 1,
+        MemoryMb = 1,
+        RestartCommand = "exe:C:\\example.exe",
+        CanStop = true
+    };
+    var protectedApplication = new RunningAppCandidate
+    {
+        ProcessName = "MSFS_AutoFPS",
+        DisplayName = "MSFS AutoFPS",
+        Impact = ImpactLevel.Low,
+        Reason = "test",
+        InstanceCount = 1,
+        MemoryMb = 1,
+        RestartCommand = "none:",
+        CanStop = false
+    };
+    var service = new ServiceCandidate
+    {
+        ServiceName = "ExampleService",
+        DisplayName = "Example service",
+        Impact = ImpactLevel.Low,
+        Reason = "test",
+        CanStop = true
+    };
+    var applicationSelections = new Dictionary<string, bool> { ["exampleapp"] = true, ["MSFS_AutoFPS"] = true };
+    var serviceSelections = new Dictionary<string, bool> { ["exampleservice"] = true };
+
+    SessionSelectionPolicy.ApplySaved(
+        [application, protectedApplication],
+        [service],
+        applicationSelections,
+        serviceSelections,
+        OptimizationProfile.Standard,
+        contentCreatorMode: false);
+    True(application.Selected);
+    True(!protectedApplication.Selected);
+    True(!service.Selected);
+
+    SessionSelectionPolicy.ApplySaved(
+        [application],
+        [service],
+        applicationSelections,
+        serviceSelections,
+        OptimizationProfile.Aggressive,
+        contentCreatorMode: false);
+    True(service.Selected);
+
+    var directory = Path.Combine(AppContext.BaseDirectory, "test-data", Guid.NewGuid().ToString("N"));
+    var configPath = Path.Combine(directory, "config.json");
+    await JsonStore.SaveAtomicAsync(configPath, new AppConfig
+    {
+        ApplicationSelections = new Dictionary<string, bool>(applicationSelections, StringComparer.OrdinalIgnoreCase),
+        ServiceSelections = new Dictionary<string, bool>(serviceSelections, StringComparer.OrdinalIgnoreCase)
+    });
+    var loaded = await JsonStore.LoadRequiredAsync<AppConfig>(configPath);
+    Equal(true, loaded.ApplicationSelections["exampleapp"]);
+    Equal(true, loaded.ServiceSelections["exampleservice"]);
+    Directory.Delete(directory, true);
+}
+
+static Task TestIl2KoreaLauncherResolutionAsync()
+{
+    var root = @"D:\Games\Il2Series";
+    var expected = Path.GetFullPath(Path.Combine(root, @"bin\game\launcher.exe"));
+    var actual = SystemScanner.ResolveIl2KoreaLauncher(
+        [root],
+        path => path.Equals(expected, StringComparison.OrdinalIgnoreCase));
+    Equal(expected, actual);
+
+    var missing = SystemScanner.ResolveIl2KoreaLauncher([root], _ => false);
+    True(missing is null);
     return Task.CompletedTask;
 }
 

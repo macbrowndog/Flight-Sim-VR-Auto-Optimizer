@@ -19,6 +19,7 @@ public partial class MainWindow : Window
     private Task? _sessionTask;
     private bool _allowClose;
     private bool _applyingConfig;
+    private readonly SemaphoreSlim _configSaveLock = new(1, 1);
 
     public MainWindow(bool continueSession = false)
     {
@@ -78,7 +79,6 @@ public partial class MainWindow : Window
 
         var simulator = detectedSimulator.Definition;
         _config = ReadConfigFromControls(simulator.Id, timeout);
-        if (_config.SessionMode == SessionMode.Automatic) SelectAllStoppableItems();
         await JsonStore.SaveAtomicAsync(_paths.ConfigFile, _config);
 
         if (_config.SessionMode == SessionMode.Automatic && !automaticConfirmed)
@@ -261,7 +261,9 @@ public partial class MainWindow : Window
             VrRuntime = VrRuntimeCombo.SelectedItem is VrRuntimePreference runtime ? runtime : VrRuntimePreference.None,
             LaunchTimeoutSeconds = timeout
         },
-        CustomApplications = ReadCustomApplications()
+        CustomApplications = ReadCustomApplications(),
+        ApplicationSelections = new Dictionary<string, bool>(_config.ApplicationSelections, StringComparer.OrdinalIgnoreCase),
+        ServiceSelections = new Dictionary<string, bool>(_config.ServiceSelections, StringComparer.OrdinalIgnoreCase)
     };
 
     private void ApplyOptionsToControls()
@@ -386,7 +388,10 @@ public partial class MainWindow : Window
     private void ContentCreatorCheck_Changed(object sender, RoutedEventArgs e)
     {
         if (_applications.Count == 0 && _services.Count == 0) return;
-        if (ModeCombo.SelectedItem is SessionMode.Automatic) SelectAllStoppableItems();
+        if (ModeCombo.SelectedItem is SessionMode.Automatic)
+            SelectAllStoppableItems();
+        else
+            ApplySavedSelections();
         UpdateModeDescription();
     }
 
@@ -413,7 +418,10 @@ public partial class MainWindow : Window
             ServicesGrid.Items.Refresh();
         }
         ServicesGrid.IsEnabled = !_coordinator.IsRunning && profile == OptimizationProfile.Aggressive;
-        if (ModeCombo.SelectedItem is SessionMode.Automatic) SelectAllStoppableItems();
+        if (ModeCombo.SelectedItem is SessionMode.Automatic)
+            SelectAllStoppableItems();
+        else
+            ApplySavedSelections();
         UpdateModeDescription();
     }
 
@@ -434,7 +442,10 @@ public partial class MainWindow : Window
 
     private void ApplyModeSelection()
     {
-        if (ModeCombo.SelectedItem is SessionMode.Automatic) SelectAllStoppableItems();
+        if (ModeCombo.SelectedItem is SessionMode.Automatic)
+            SelectAllStoppableItems();
+        else
+            ApplySavedSelections();
     }
 
     private void SelectAllStoppableItems()
@@ -443,6 +454,7 @@ public partial class MainWindow : Window
             ? selectedProfile
             : OptimizationProfile.Standard;
         SessionSelectionPolicy.SelectAutomatic(_applications, _services, ContentCreatorCheck.IsChecked == true, profile);
+        ApplySavedSelections();
         AppsGrid.Items.Refresh();
         ServicesGrid.Items.Refresh();
     }
@@ -450,8 +462,63 @@ public partial class MainWindow : Window
     private void ClearSelections()
     {
         SessionSelectionPolicy.Clear(_applications, _services);
+        ApplySavedSelections();
         AppsGrid.Items.Refresh();
         ServicesGrid.Items.Refresh();
+    }
+
+    private void ApplySavedSelections()
+    {
+        var profile = ProfileCombo.SelectedItem is OptimizationProfile selectedProfile
+            ? selectedProfile
+            : OptimizationProfile.Standard;
+        SessionSelectionPolicy.ApplySaved(
+            _applications,
+            _services,
+            _config.ApplicationSelections,
+            _config.ServiceSelections,
+            profile,
+            ContentCreatorCheck.IsChecked == true);
+    }
+
+    private async void CandidateSelection_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.CheckBox checkBox) return;
+        var selected = checkBox.IsChecked == true;
+        switch (checkBox.DataContext)
+        {
+            case RunningAppCandidate application:
+                application.Selected = selected && application.CanStop;
+                _config.ApplicationSelections[application.ProcessName] = application.Selected;
+                break;
+            case ServiceCandidate service:
+                service.Selected = selected
+                    && service.CanStop
+                    && ProfileCombo.SelectedItem is OptimizationProfile.Aggressive;
+                _config.ServiceSelections[service.ServiceName] = service.Selected;
+                break;
+            default:
+                return;
+        }
+
+        await SaveSelectionPreferencesAsync();
+    }
+
+    private async Task SaveSelectionPreferencesAsync()
+    {
+        await _configSaveLock.WaitAsync();
+        try
+        {
+            await JsonStore.SaveAtomicAsync(_paths.ConfigFile, _config);
+        }
+        catch (Exception exception)
+        {
+            AppendStatus("Unable to save application/service selections: " + exception.Message);
+        }
+        finally
+        {
+            _configSaveLock.Release();
+        }
     }
 
     private List<CustomApplicationRule> ReadCustomApplications()
@@ -500,7 +567,9 @@ public partial class MainWindow : Window
                 SelectedSimulatorId = pending.SimulatorId,
                 SessionMode = pending.SessionMode,
                 Options = pending.Options,
-                CustomApplications = pending.CustomApplications.ToList()
+                CustomApplications = pending.CustomApplications.ToList(),
+                ApplicationSelections = new Dictionary<string, bool>(_config.ApplicationSelections, StringComparer.OrdinalIgnoreCase),
+                ServiceSelections = new Dictionary<string, bool>(_config.ServiceSelections, StringComparer.OrdinalIgnoreCase)
             };
             ApplyOptionsToControls();
             SimulatorCombo.SelectedItem = SimulatorCombo.Items.Cast<DetectedSimulator>()
