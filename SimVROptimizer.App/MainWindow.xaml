@@ -65,7 +65,7 @@
                     <DataGrid x:Name="AppsGrid" Grid.Row="1" AutoGenerateColumns="False" Background="#0C1214" Foreground="{StaticResource TextBrush}"
                               RowBackground="#0C1214" AlternatingRowBackground="#111A1D" GridLinesVisibility="Horizontal" BorderThickness="0">
                         <DataGrid.Columns>
-                            <DataGridTemplateColumn Header="CUT" Width="55"><DataGridTemplateColumn.CellTemplate><DataTemplate><CheckBox IsChecked="{Binding Selected, Mode=TwoWay}" IsEnabled="{Binding CanStop}" HorizontalAlignment="Center" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="CUT" Width="55"><DataGridTemplateColumn.CellTemplate><DataTemplate><CheckBox IsChecked="{Binding Selected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding CanStop}" Click="CandidateSelection_Click" HorizontalAlignment="Center" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
                             <DataGridTextColumn Header="APPLICATION" Binding="{Binding DisplayName}" Width="1.4*" IsReadOnly="True" />
                             <DataGridTextColumn Header="IMPACT" Binding="{Binding Impact}" Width="75" IsReadOnly="True" />
                             <DataGridTextColumn Header="MEM MB" Binding="{Binding MemoryMb}" Width="78" IsReadOnly="True" />
@@ -84,7 +84,7 @@
                     <DataGrid x:Name="ServicesGrid" Grid.Row="1" AutoGenerateColumns="False" Background="#0C1214" Foreground="{StaticResource TextBrush}"
                               RowBackground="#0C1214" AlternatingRowBackground="#111A1D" GridLinesVisibility="Horizontal" BorderThickness="0">
                         <DataGrid.Columns>
-                            <DataGridTemplateColumn Header="CUT" Width="55"><DataGridTemplateColumn.CellTemplate><DataTemplate><CheckBox IsChecked="{Binding Selected, Mode=TwoWay}" IsEnabled="{Binding CanStop}" HorizontalAlignment="Center" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="CUT" Width="55"><DataGridTemplateColumn.CellTemplate><DataTemplate><CheckBox IsChecked="{Binding Selected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding CanStop}" Click="CandidateSelection_Click" HorizontalAlignment="Center" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
                             <DataGridTextColumn Header="SERVICE" Binding="{Binding DisplayName}" Width="1.4*" IsReadOnly="True" />
                             <DataGridTextColumn Header="IMPACT" Binding="{Binding Impact}" Width="75" IsReadOnly="True" />
                             <DataGridTextColumn Header="OPERATIONAL NOTE" Binding="{Binding Reason}" Width="3*" IsReadOnly="True" />

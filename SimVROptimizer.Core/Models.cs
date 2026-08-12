@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 
 namespace SimVROptimizer.Core;
@@ -116,8 +118,10 @@ public sealed class DetectedSimulator
     public string Name => Definition.Name;
 }
 
-public sealed class RunningAppCandidate
+public sealed class RunningAppCandidate : INotifyPropertyChanged
 {
+    private bool _selected;
+
     public required string ProcessName { get; init; }
     public required string DisplayName { get; init; }
     public required ImpactLevel Impact { get; init; }
@@ -129,7 +133,21 @@ public sealed class RunningAppCandidate
     public required bool CanStop { get; init; }
     public bool IsCustom { get; init; }
     public string RestartSupport => RestartCommand.StartsWith("none:", StringComparison.OrdinalIgnoreCase) ? "Manual" : "Automatic";
-    public bool Selected { get; set; }
+    public bool Selected
+    {
+        get => _selected;
+        set
+        {
+            if (_selected == value) return;
+            _selected = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 }
 
 public static class SessionSelectionPolicy
@@ -180,18 +198,77 @@ public static class SessionSelectionPolicy
         foreach (var service in services) service.Selected = false;
     }
 
+    public static void ApplySaved(
+        IEnumerable<RunningAppCandidate> applications,
+        IEnumerable<ServiceCandidate> services,
+        IReadOnlyDictionary<string, bool> applicationSelections,
+        IReadOnlyDictionary<string, bool> serviceSelections,
+        OptimizationProfile profile,
+        bool contentCreatorMode)
+    {
+        foreach (var application in applications)
+        {
+            if (TryGetSelection(applicationSelections, application.ProcessName, out var selected))
+                application.Selected = selected
+                    && application.CanStop
+                    && !(contentCreatorMode && IsContentCreatorApplication(application));
+        }
+
+        foreach (var service in services)
+        {
+            if (TryGetSelection(serviceSelections, service.ServiceName, out var selected))
+                service.Selected = selected
+                    && profile == OptimizationProfile.Aggressive
+                    && service.CanStop
+                    && !(contentCreatorMode && IsContentCreatorService(service));
+        }
+    }
+
+    private static bool TryGetSelection(
+        IReadOnlyDictionary<string, bool> selections,
+        string key,
+        out bool selected)
+    {
+        if (selections.TryGetValue(key, out selected)) return true;
+        foreach (var pair in selections)
+        {
+            if (!pair.Key.Equals(key, StringComparison.OrdinalIgnoreCase)) continue;
+            selected = pair.Value;
+            return true;
+        }
+
+        selected = false;
+        return false;
+    }
+
     private static bool ContainsMarker(string value, IEnumerable<string> markers) =>
         markers.Any(marker => value.Contains(marker, StringComparison.OrdinalIgnoreCase));
 }
 
-public sealed class ServiceCandidate
+public sealed class ServiceCandidate : INotifyPropertyChanged
 {
+    private bool _selected;
+
     public required string ServiceName { get; init; }
     public required string DisplayName { get; init; }
     public required ImpactLevel Impact { get; init; }
     public required string Reason { get; init; }
     public required bool CanStop { get; init; }
-    public bool Selected { get; set; }
+    public bool Selected
+    {
+        get => _selected;
+        set
+        {
+            if (_selected == value) return;
+            _selected = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 }
 
 public sealed class SystemScanResult
@@ -207,6 +284,8 @@ public sealed class AppConfig
     public SessionMode SessionMode { get; set; } = SessionMode.Manual;
     public OptimizerOptions Options { get; set; } = new();
     public List<CustomApplicationRule> CustomApplications { get; set; } = [];
+    public Dictionary<string, bool> ApplicationSelections { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, bool> ServiceSelections { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
 public sealed class CustomApplicationRule

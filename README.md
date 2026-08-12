@@ -9,7 +9,7 @@ It scans the local PC, explains the likely MSFS impact of running applications a
 
 ## Features
 
-- Automatic detection of nine MSFS, DCS World, X-Plane, and IL-2 configurations
+- Automatic detection of ten MSFS, DCS World, X-Plane, and IL-2 configurations
 - Standard and Aggressive optimization profiles with editable granular controls
 - Manual checkbox control or an Automatic session workflow
 - Configurable Virtual Desktop, Pimax Play, SteamVR, or no-runtime launching
@@ -61,8 +61,9 @@ No program can guarantee recovery after disk corruption or an operating-system f
 - DCS World — Steam and standalone
 - X-Plane 12 — Steam and standalone
 - IL-2 Sturmovik: Battle of Stalingrad — Steam
+- Korea. IL-2 Series — standalone launcher
 
-The application scans Steam library manifests, Microsoft Store packages, DCS registry installation paths, and ready drive roots for a standalone X-Plane 12 installation. Only detected simulators are offered in the launch selector.
+The application scans Steam library manifests, Microsoft Store packages, DCS registry installation paths, ready drive roots for a standalone X-Plane 12 installation, and Windows uninstall records plus common installation roots for the standalone Korea. IL-2 Series launcher. Only detected simulators are offered in the launch selector.
 
 Additional simulator configurations may be added in future releases.
 
@@ -127,6 +128,16 @@ The test runner has no third-party test framework dependency. It covers output p
 ## License
 
 Licensed under the [MIT License](LICENSE).
+
+## Release notes — 1.9.0
+
+- Added Korea. IL-2 Series as a separate standalone simulator configuration.
+- Added flexible Korea launcher detection through Windows uninstall records and bounded common installation roots, including the current `Il2Series` layout.
+- Fixed application and service checkbox selections being visually lost when virtualized table rows were scrolled out of view and reused.
+- Persisted explicit stop/do-not-stop preferences in `config.json` across scrolling, rescans, workflow or profile changes, application restarts, and administrator handoff.
+- Preserved user-adjusted application selections when starting an Automatic workflow.
+- Protected MSFS AutoFPS process variants from manual and automatic stopping so simulator autostart remains available.
+- Added launcher-path, simulator-configuration, selection-state, and saved-preference validation, bringing the automated test suite to 22 tests.
 
 ## Release notes — 1.8.1
 

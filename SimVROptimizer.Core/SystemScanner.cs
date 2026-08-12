@@ -55,7 +55,10 @@ public sealed class SystemScanner
         ["steam"] = new(ImpactLevel.Low, "Steam", "Required to launch and maintain Steam simulator sessions; protected from stopping."),
         ["VirtualDesktop.Streamer"] = new(ImpactLevel.Low, "Virtual Desktop Streamer", "VR runtime component; protected from stopping."),
         ["vrserver"] = new(ImpactLevel.Low, "SteamVR Server", "VR runtime component; protected from stopping."),
-        ["vrmonitor"] = new(ImpactLevel.Low, "SteamVR Monitor", "VR runtime component; protected from stopping.")
+        ["vrmonitor"] = new(ImpactLevel.Low, "SteamVR Monitor", "VR runtime component; protected from stopping."),
+        ["MSFS_AutoFPS"] = new(ImpactLevel.Low, "MSFS AutoFPS", "Simulator performance companion; protected so MSFS can start and use it."),
+        ["MSFS2020_AutoFPS"] = new(ImpactLevel.Low, "MSFS 2020 AutoFPS", "Simulator performance companion; protected so MSFS can start and use it."),
+        ["MSFS2024_AutoFPS"] = new(ImpactLevel.Low, "MSFS 2024 AutoFPS", "Simulator performance companion; protected so MSFS can start and use it.")
     };
 
     private static readonly Dictionary<string, ImpactProfile> ServiceProfiles = new(StringComparer.OrdinalIgnoreCase)
@@ -99,7 +102,8 @@ public sealed class SystemScanner
     private static readonly HashSet<string> ProtectedApps = new(StringComparer.OrdinalIgnoreCase)
     {
         "steam", "steamwebhelper", "VirtualDesktop.Streamer", "vrserver", "vrmonitor", "vrcompositor",
-        "OculusClient", "OVRServer_x64", "PimaxClient", "PimaxPlay", "PiTool"
+        "OculusClient", "OVRServer_x64", "PimaxClient", "PimaxPlay", "PiTool",
+        "MSFS_AutoFPS", "MSFS2020_AutoFPS", "MSFS2024_AutoFPS"
     };
 
     private readonly ICommandRunner _commands;
@@ -136,6 +140,7 @@ public sealed class SystemScanner
         await DetectStoreAppAsync(found, SimulatorCatalog.All[5], "Microsoft.FlightSimulator", cancellationToken).ConfigureAwait(false);
         DetectDcsStandalone(found);
         DetectXPlaneStandalone(found);
+        DetectIl2KoreaStandalone(found);
         return found.Values.OrderBy(item => item.Name).ToArray();
     }
 
@@ -196,6 +201,144 @@ public sealed class SystemScanner
             var definition = new SimulatorDefinition("xplane12-standalone", "X-Plane 12 (Standalone)", ["X-Plane"], LaunchKind.Executable, executable);
             found[definition.Id] = new DetectedSimulator { Definition = definition, Detection = executable };
         }
+    }
+
+    private static void DetectIl2KoreaStandalone(Dictionary<string, DetectedSimulator> found)
+    {
+        var launcher = ResolveIl2KoreaLauncher(GetIl2KoreaInstallRoots());
+        if (launcher is null) return;
+
+        var definition = new SimulatorDefinition(
+            "il2-korea-standalone",
+            "Korea. IL-2 Series (Standalone)",
+            ["IL2Series", "IL2", "IL-2", "Il2Korea", "IL2Korea", "Korea", "Korea_IL2"],
+            LaunchKind.Executable,
+            launcher);
+        found[definition.Id] = new DetectedSimulator
+        {
+            Definition = definition,
+            Detection = $"Standalone launcher: {launcher}"
+        };
+    }
+
+    public static string? ResolveIl2KoreaLauncher(
+        IEnumerable<string> installRoots,
+        Func<string, bool>? fileExists = null)
+    {
+        fileExists ??= File.Exists;
+        string[] relativePaths =
+        [
+            "launcher.exe",
+            "IL2Launcher.exe",
+            "KoreaLauncher.exe",
+            @"bin\game\launcher.exe",
+            @"bin\game\IL2Launcher.exe",
+            @"bin\game\KoreaLauncher.exe"
+        ];
+
+        foreach (var root in installRoots.Where(root => !string.IsNullOrWhiteSpace(root)).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            foreach (var relativePath in relativePaths)
+            {
+                try
+                {
+                    var candidate = Path.GetFullPath(Path.Combine(root, relativePath));
+                    if (fileExists(candidate)) return candidate;
+                }
+                catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+                {
+                    // Ignore malformed third-party uninstall paths and continue with the remaining candidates.
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<string> GetIl2KoreaInstallRoots()
+    {
+        var roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var registryLocations = new[]
+        {
+            (RegistryHive.LocalMachine, RegistryView.Registry64),
+            (RegistryHive.LocalMachine, RegistryView.Registry32),
+            (RegistryHive.CurrentUser, RegistryView.Registry64),
+            (RegistryHive.CurrentUser, RegistryView.Registry32)
+        };
+
+        foreach (var (hive, view) in registryLocations)
+        {
+            try
+            {
+                using var baseKey = RegistryKey.OpenBaseKey(hive, view);
+                using var uninstall = baseKey.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall");
+                if (uninstall is null) continue;
+
+                foreach (var subKeyName in uninstall.GetSubKeyNames())
+                {
+                    using var entry = uninstall.OpenSubKey(subKeyName);
+                    var displayName = entry?.GetValue("DisplayName") as string;
+                    if (!IsIl2KoreaName(displayName)) continue;
+
+                    AddDirectory(roots, entry?.GetValue("InstallLocation") as string);
+                    AddExecutableDirectory(roots, entry?.GetValue("DisplayIcon") as string);
+                    AddExecutableDirectory(roots, entry?.GetValue("UninstallString") as string);
+                }
+            }
+            catch (Exception) when (hive is RegistryHive.LocalMachine or RegistryHive.CurrentUser)
+            {
+                // A denied or malformed uninstall entry must not prevent the rest of the PC scan.
+            }
+        }
+
+        string[] folderNames = ["Il2Series", "IL2 Korea", "Korea. IL-2 Series", "IL-2 Korea", "IL-2 Sturmovik Korea", "IL-2 Series Korea"];
+        var parentFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Games")
+        };
+        foreach (var drive in DriveInfo.GetDrives().Where(drive => drive.IsReady))
+            parentFolders.Add(drive.RootDirectory.FullName);
+
+        foreach (var parent in parentFolders.Where(parent => !string.IsNullOrWhiteSpace(parent)))
+            foreach (var folderName in folderNames)
+                roots.Add(Path.Combine(parent, folderName));
+
+        return roots;
+    }
+
+    private static bool IsIl2KoreaName(string? displayName) =>
+        !string.IsNullOrWhiteSpace(displayName) &&
+        displayName.Contains("Korea", StringComparison.OrdinalIgnoreCase) &&
+        (displayName.Contains("IL-2", StringComparison.OrdinalIgnoreCase) ||
+         displayName.Contains("IL2", StringComparison.OrdinalIgnoreCase));
+
+    private static void AddDirectory(ISet<string> roots, string? directory)
+    {
+        if (!string.IsNullOrWhiteSpace(directory))
+            roots.Add(Environment.ExpandEnvironmentVariables(directory.Trim().Trim('"')));
+    }
+
+    private static void AddExecutableDirectory(ISet<string> roots, string? command)
+    {
+        if (string.IsNullOrWhiteSpace(command)) return;
+        var expanded = Environment.ExpandEnvironmentVariables(command.Trim());
+        string executable;
+        if (expanded.StartsWith('"'))
+        {
+            var closingQuote = expanded.IndexOf('"', 1);
+            executable = closingQuote > 1 ? expanded[1..closingQuote] : expanded.Trim('"');
+        }
+        else
+        {
+            var exeEnd = expanded.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
+            executable = exeEnd >= 0 ? expanded[..(exeEnd + 4)] : expanded;
+        }
+
+        var directory = Path.GetDirectoryName(executable);
+        if (!string.IsNullOrWhiteSpace(directory)) roots.Add(directory);
     }
 
     private static IReadOnlyList<RunningAppCandidate> ScanApplications(IReadOnlyList<CustomApplicationRule> customApplications)
@@ -390,7 +533,8 @@ public sealed class SystemScanner
             || name.Equals("pia-service", StringComparison.OrdinalIgnoreCase)
             || name.Contains("PrivateInternetAccess", StringComparison.OrdinalIgnoreCase)
             || name.Contains("FSUIPC", StringComparison.OrdinalIgnoreCase)
-            || name.Contains("TrackIR", StringComparison.OrdinalIgnoreCase);
+            || name.Contains("TrackIR", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("AutoFPS", StringComparison.OrdinalIgnoreCase);
     }
 
     private static int GetServiceLaunchProtection(string serviceName)
