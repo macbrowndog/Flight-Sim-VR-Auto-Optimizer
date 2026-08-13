@@ -38,8 +38,10 @@ class IngamePanelFlightDeckToolsDashboard extends TemplateElement {
       ui.addEventListener("panelActive", () => setTimeout(() => this.fitPanelHeight(), 100));
     }
     document.addEventListener("dataStorageReady", () => setTimeout(() => this.fitPanelHeight(), 100));
-    const resetButton = document.getElementById("reset-alerts");
-    if (resetButton) resetButton.addEventListener("click", () => this.resetCounters());
+    const resetStutters = document.getElementById("reset-stutters");
+    if (resetStutters) resetStutters.addEventListener("click", () => this.resetStutters());
+    const resetSpikes = document.getElementById("reset-spikes");
+    if (resetSpikes) resetSpikes.addEventListener("click", () => this.resetSpikes());
     window.addEventListener("resize", () => this.drawGraphs());
     this.connect();
     setTimeout(() => this.fitPanelHeight(), 500);
@@ -98,7 +100,9 @@ class IngamePanelFlightDeckToolsDashboard extends TemplateElement {
       this.setMetric("one-low", sample.onePercentLowFps, 1);
       this.setMetric("frame-ms", sample.frameTimeMs, 1);
       this.setText("sim-cpu", this.number(sample.simulatorCpuPercent, 1) + "%");
-      this.setText("threads", String(sample.simulatorThreadCount));
+      this.setText("main-thread", sample.mainThreadFrameTimeMs == null
+        ? "—"
+        : this.number(sample.mainThreadFrameTimeMs, 1) + " ms");
       this.setText("memory", this.integer(sample.simulatorMemoryMb) + " MB");
       this.setText("system-cpu", "SYSTEM CPU " + this.number(sample.systemCpuPercent, 1) + "%");
       this.setText("cpu-name", frame.cpuName || "CPU MODEL UNAVAILABLE");
@@ -115,30 +119,32 @@ class IngamePanelFlightDeckToolsDashboard extends TemplateElement {
 
     this.serverStutters = frame.stutterCount || 0;
     this.serverSpikes = frame.cpuSpikeCount || 0;
-    if (this.serverStutters < this.counterBaseline.stutters || this.serverSpikes < this.counterBaseline.spikes)
-      this.counterBaseline = { stutters: 0, spikes: 0 };
+    if (this.serverStutters < this.counterBaseline.stutters) this.counterBaseline.stutters = 0;
+    if (this.serverSpikes < this.counterBaseline.spikes) this.counterBaseline.spikes = 0;
     const stutters = Math.max(0, this.serverStutters - this.counterBaseline.stutters);
     const spikes = Math.max(0, this.serverSpikes - this.counterBaseline.spikes);
-    const alert = document.getElementById("alerts");
-    if (alert) {
-      alert.textContent = stutters || spikes
-        ? "DETECTED: " + stutters + " FRAME-TIME STUTTER(S) / " + spikes + " CPU SPIKE SAMPLE(S)"
-        : "NO SPIKES OR STUTTERS RECORDED";
-      const card = alert.closest(".alert-card");
-      if (card) {
-        card.classList.toggle("warning", stutters > 0 || spikes > 0);
-        card.classList.toggle("good", stutters === 0 && spikes === 0);
-      }
-    }
+    this.renderCounter("stutter-alert", "stutter-card", "FRAME-TIME STUTTERS", stutters);
+    this.renderCounter("spike-alert", "spike-card", "CPU SPIKE SAMPLES", spikes);
     this.fitPanelHeight();
   }
 
-  resetCounters() {
-    this.counterBaseline = { stutters: this.serverStutters, spikes: this.serverSpikes };
-    const alert = document.getElementById("alerts");
-    if (alert) alert.textContent = "NO SPIKES OR STUTTERS RECORDED";
-    const card = alert ? alert.closest(".alert-card") : null;
-    if (card) { card.classList.remove("warning"); card.classList.add("good"); }
+  resetStutters() {
+    this.counterBaseline.stutters = this.serverStutters;
+    this.renderCounter("stutter-alert", "stutter-card", "FRAME-TIME STUTTERS", 0);
+  }
+
+  resetSpikes() {
+    this.counterBaseline.spikes = this.serverSpikes;
+    this.renderCounter("spike-alert", "spike-card", "CPU SPIKE SAMPLES", 0);
+  }
+
+  renderCounter(textId, cardId, label, count) {
+    this.setText(textId, label + ": " + count);
+    const card = document.getElementById(cardId);
+    if (card) {
+      card.classList.toggle("warning", count > 0);
+      card.classList.toggle("good", count === 0);
+    }
   }
 
   fitPanelHeight() {

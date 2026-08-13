@@ -39,7 +39,7 @@ public sealed class DashboardTelemetryServer : IAsyncDisposable
     private Task? _acceptLoop;
     private long _nextClientId;
     private DashboardTelemetryFrame _snapshot = new(
-        3, DateTimeOffset.UtcNow, false, "Optimizer ready", "", 0, 0, null, "", []);
+        4, DateTimeOffset.UtcNow, false, "Optimizer ready", "", 0, 0, null, "", []);
 
     public DashboardTelemetryServer(FileLogger logger, int port = DefaultPort, CpuProfile? cpuProfile = null)
     {
@@ -76,7 +76,7 @@ public sealed class DashboardTelemetryServer : IAsyncDisposable
         lock (_snapshotGate)
         {
             _snapshot = new DashboardTelemetryFrame(
-                3, DateTimeOffset.UtcNow, true, "Waiting for the first performance sample", simulator, 0, 0, null,
+                4, DateTimeOffset.UtcNow, true, "Waiting for the first performance sample", simulator, 0, 0, null,
                 _cpuProfile?.Model ?? "", []);
         }
         BroadcastSnapshot();
@@ -115,14 +115,26 @@ public sealed class DashboardTelemetryServer : IAsyncDisposable
         BroadcastSnapshot();
     }
 
-    public void ResetCounters()
+    public void ResetStutterCounter()
     {
         lock (_snapshotGate)
         {
             _snapshot = _snapshot with
             {
                 Timestamp = DateTimeOffset.UtcNow,
-                StutterCount = 0,
+                StutterCount = 0
+            };
+        }
+        BroadcastSnapshot();
+    }
+
+    public void ResetCpuSpikeCounter()
+    {
+        lock (_snapshotGate)
+        {
+            _snapshot = _snapshot with
+            {
+                Timestamp = DateTimeOffset.UtcNow,
                 CpuSpikeCount = 0
             };
         }

@@ -42,6 +42,18 @@ public static class UserProfileStore
         return removed;
     }
 
+    public static AppConfig CreateContinuedConfig(AppConfig current, PendingLaunch pending) => new()
+    {
+        SelectedSimulatorId = pending.SimulatorId,
+        SessionMode = pending.SessionMode,
+        Options = Copy(pending.Options),
+        CustomApplications = pending.CustomApplications.Select(Copy).ToList(),
+        ApplicationSelections = Copy(current.ApplicationSelections),
+        ServiceSelections = Copy(current.ServiceSelections),
+        ActiveSavedProfileName = current.ActiveSavedProfileName,
+        SavedProfiles = current.SavedProfiles.Select(Copy).ToList()
+    };
+
     private static SavedUserProfile Snapshot(AppConfig config, string name) => new()
     {
         Name = name,
@@ -89,6 +101,18 @@ public static class UserProfileStore
     {
         ProcessName = source.ProcessName,
         RestartExecutablePath = source.RestartExecutablePath
+    };
+
+    private static SavedUserProfile Copy(SavedUserProfile source) => new()
+    {
+        Name = source.Name,
+        SelectedSimulatorId = source.SelectedSimulatorId,
+        SessionMode = source.SessionMode,
+        Options = Copy(source.Options),
+        CustomApplications = source.CustomApplications.Select(Copy).ToList(),
+        ApplicationSelections = Copy(source.ApplicationSelections),
+        ServiceSelections = Copy(source.ServiceSelections),
+        UpdatedAtUtc = source.UpdatedAtUtc
     };
 
     private static Dictionary<string, bool> Copy(Dictionary<string, bool> source) =>

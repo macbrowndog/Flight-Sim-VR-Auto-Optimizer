@@ -161,6 +161,15 @@ The test runner has no third-party test framework dependency. It covers output p
 
 Licensed under the [MIT License](LICENSE).
 
+## Release notes — 1.10.1
+
+- Fixed saved user profiles so the selected profile loads reliably, its application and service choices are not overwritten by UI events, and the complete profile catalogue survives administrator/UAC continuation.
+- Added clear profile-load confirmation with simulator, workflow, optimization mode, and restored selection counts; serialized configuration writes to prevent competing saves.
+- Replaced the simulator thread-count tile with **MAIN THREAD** frame time in milliseconds on the Windows dashboard, MSFS toolbar panel, telemetry bridge, and CSV output.
+- Split frame-time stutters and CPU spike samples into independent indicators with a separate reset control for each on both dashboards.
+- Refined the MSFS VR toolbar layout and reduced processor-summary and counter typography for clearer viewing in VR.
+- Updated the bundled MSFS toolbar package to 1.10.1 and expanded automated validation to 37 passing tests.
+
 ## Release notes — 1.10.0
 
 - Added a live desktop performance dashboard for simulator FPS, frame time, average FPS, 1% low FPS, system and simulator CPU, thread count, memory, stutter detection, CPU-spike detection, and optional CSV logging.

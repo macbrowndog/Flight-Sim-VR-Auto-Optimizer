@@ -34,7 +34,7 @@
             <article><label>1% LOW</label><strong id="one-low" class="amber">—</strong></article>
             <article><label>FRAME MS</label><strong id="frame-ms">—</strong></article>
             <article><label>SIM CPU</label><strong id="sim-cpu" class="amber">—</strong></article>
-            <article><label>THREADS</label><strong id="threads">—</strong></article>
+            <article><label>MAIN THREAD</label><strong id="main-thread">—</strong></article>
             <article><label>MEMORY</label><strong id="memory">—</strong></article>
           </section>
 
@@ -56,10 +56,16 @@
             <div id="cores" class="processor-summary"><div class="empty">Waiting for CPU samples…</div></div>
           </section>
 
-          <section class="alert-card good">
-            <span id="alerts">NO SPIKES OR STUTTERS RECORDED</span>
-            <button id="reset-alerts" class="reset-alerts nodrag" type="button">RESET COUNTERS</button>
-          </section>
+          <div class="alert-grid">
+            <section id="stutter-card" class="alert-card good">
+              <span id="stutter-alert">FRAME-TIME STUTTERS: 0</span>
+              <button id="reset-stutters" class="reset-alerts nodrag" type="button">RESET STUTTERS</button>
+            </section>
+            <section id="spike-card" class="alert-card good">
+              <span id="spike-alert">CPU SPIKE SAMPLES: 0</span>
+              <button id="reset-spikes" class="reset-alerts nodrag" type="button">RESET SPIKES</button>
+            </section>
+          </div>
           <footer>DASHBOARD ONLY / OPTIMIZER CONTROLS REMAIN ON THE WINDOWS DESKTOP</footer>
         </main>
         <section id="MainDisplay"></section>

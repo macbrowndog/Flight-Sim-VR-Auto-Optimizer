@@ -19,6 +19,8 @@ public sealed class PerformanceDashboardMonitor : IAsyncDisposable
     private SimConnectFpsSource? _simConnect;
     private Process? _simulator;
     private TimeSpan _lastSimulatorCpu;
+    private int? _mainThreadId;
+    private TimeSpan _lastMainThreadCpu;
     private DateTime _lastSampleUtc;
     private StreamWriter? _csv;
     private string _frameSourceStatus = "Waiting for simulator";
@@ -46,6 +48,7 @@ public sealed class PerformanceDashboardMonitor : IAsyncDisposable
         _simulatorProcessId = processId;
         _simulatorProcessName = _simulator.ProcessName;
         _lastSimulatorCpu = _simulator.TotalProcessorTime;
+        (_mainThreadId, _lastMainThreadCpu) = FindMainThread(_simulator);
         _lastSampleUtc = DateTime.UtcNow;
         _cpuSampler.Reset();
         _sessionFrameTimes.Clear();
@@ -62,7 +65,7 @@ public sealed class PerformanceDashboardMonitor : IAsyncDisposable
             Directory.CreateDirectory(_paths.TelemetryDirectory);
             var path = Path.Combine(_paths.TelemetryDirectory, $"telemetry-{DateTime.Now:yyyyMMdd-HHmmss}-pid{processId}.csv");
             _csv = new StreamWriter(path, false, new UTF8Encoding(false));
-            await _csv.WriteLineAsync("Timestamp,FPS,AverageFPS,OnePercentLowFPS,FrameTimeMs,SystemCPU,SimulatorCPU,Threads,MemoryMB,CpuSpike,Stutter").ConfigureAwait(false);
+            await _csv.WriteLineAsync("Timestamp,FPS,AverageFPS,OnePercentLowFPS,FrameTimeMs,SystemCPU,SimulatorCPU,MainThreadMs,MemoryMB,CpuSpike,Stutter").ConfigureAwait(false);
             await _logger.WriteAsync($"Performance CSV logging enabled: {path}", cancellationToken).ConfigureAwait(false);
         }
 
@@ -142,6 +145,7 @@ public sealed class PerformanceDashboardMonitor : IAsyncDisposable
                 var processCpuTime = _simulator.TotalProcessorTime;
                 var processCpu = (processCpuTime - _lastSimulatorCpu).TotalSeconds / elapsed / Math.Max(1, Environment.ProcessorCount) * 100;
                 _lastSimulatorCpu = processCpuTime;
+                var mainThreadCpu = SampleMainThreadCpu(elapsed);
                 _lastSampleUtc = now;
 
                 var cores = _cpuSampler.Sample();
@@ -155,6 +159,7 @@ public sealed class PerformanceDashboardMonitor : IAsyncDisposable
 
                 var currentFrame = recentFrames.Count > 0 ? recentFrames.Average() : (double?)null;
                 var fps = currentFrame.HasValue ? 1000d / currentFrame.Value : (double?)null;
+                var mainThreadFrameTime = CalculateMainThreadFrameTimeMs(mainThreadCpu, fps);
                 var averageFps = _sessionFrameTimes.Count > 0 ? 1000d / _sessionFrameTimes.Average() : (double?)null;
                 var oneLow = CalculateOnePercentLow(_sessionFrameTimes);
                 var median = Median(_sessionFrameTimes.TakeLast(240).ToArray());
@@ -164,14 +169,14 @@ public sealed class PerformanceDashboardMonitor : IAsyncDisposable
                 var sample = new PerformanceTelemetrySample(
                     DateTimeOffset.Now, fps, averageFps, oneLow, currentFrame,
                     Math.Clamp(systemCpu, 0, 100), Math.Clamp(processCpu, 0, 100),
-                    _simulator.Threads.Count, _simulator.WorkingSet64 / 1024 / 1024,
+                    mainThreadFrameTime, _simulator.WorkingSet64 / 1024 / 1024,
                     cores, cpuSpike, stutter, _frameSourceStatus);
                 SampleReady?.Invoke(sample);
                 if (_csv is not null)
                 {
                     await _csv.WriteLineAsync(string.Join(',',
                         sample.Timestamp.ToString("O"), N(sample.Fps), N(sample.AverageFps), N(sample.OnePercentLowFps), N(sample.FrameTimeMs),
-                        N(sample.SystemCpuPercent), N(sample.SimulatorCpuPercent), sample.SimulatorThreadCount, sample.SimulatorMemoryMb,
+                        N(sample.SystemCpuPercent), N(sample.SimulatorCpuPercent), N(sample.MainThreadFrameTimeMs), sample.SimulatorMemoryMb,
                         sample.CpuSpike, sample.Stutter)).ConfigureAwait(false);
                     await _csv.FlushAsync(cancellationToken).ConfigureAwait(false);
                 }
@@ -181,6 +186,65 @@ public sealed class PerformanceDashboardMonitor : IAsyncDisposable
                 break;
             }
         }
+    }
+
+    private double? SampleMainThreadCpu(double elapsedSeconds)
+    {
+        if (_simulator is null) return null;
+        if (!_mainThreadId.HasValue)
+        {
+            (_mainThreadId, _lastMainThreadCpu) = FindMainThread(_simulator);
+            return null;
+        }
+
+        try
+        {
+            var thread = _simulator.Threads.Cast<ProcessThread>()
+                .FirstOrDefault(item => item.Id == _mainThreadId.Value);
+            if (thread is null)
+            {
+                _mainThreadId = null;
+                return null;
+            }
+            var current = thread.TotalProcessorTime;
+            var percent = CalculateThreadCpuPercent(current, _lastMainThreadCpu, TimeSpan.FromSeconds(elapsedSeconds));
+            _lastMainThreadCpu = current;
+            return percent;
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    private static (int? Id, TimeSpan CpuTime) FindMainThread(Process process)
+    {
+        try
+        {
+            var thread = process.Threads.Cast<ProcessThread>()
+                .Select(item =>
+                {
+                    try { return (Thread: item, Started: item.StartTime); }
+                    catch { return (Thread: item, Started: DateTime.MaxValue); }
+                })
+                .OrderBy(item => item.Started)
+                .ThenBy(item => item.Thread.Id)
+                .FirstOrDefault();
+            return thread.Thread is null ? (null, TimeSpan.Zero) : (thread.Thread.Id, thread.Thread.TotalProcessorTime);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
+        {
+            return (null, TimeSpan.Zero);
+        }
+    }
+
+    public static double CalculateThreadCpuPercent(TimeSpan current, TimeSpan previous, TimeSpan elapsed) =>
+        Math.Clamp((current - previous).TotalSeconds / Math.Max(0.001, elapsed.TotalSeconds) * 100, 0, 100);
+
+    public static double? CalculateMainThreadFrameTimeMs(double? mainThreadCpuPercent, double? fps)
+    {
+        if (!mainThreadCpuPercent.HasValue || !fps.HasValue || fps.Value <= 0) return null;
+        return Math.Clamp(mainThreadCpuPercent.Value / 100 * 1000 / fps.Value, 0, 1000);
     }
 
     private void StartPresentMon(int processId, string? processName = null)

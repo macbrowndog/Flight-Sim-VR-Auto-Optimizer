@@ -24,6 +24,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Selection state notification", TestSelectionStateNotificationAsync),
     ("Saved selection preferences", TestSavedSelectionPreferencesAsync),
     ("Named user profiles", TestNamedUserProfilesAsync),
+    ("Profiles survive administrator continuation", TestProfilesSurviveContinuationAsync),
     ("Persistent custom application rule", TestCustomApplicationRuleAsync),
     ("Ten simulator configurations", TestSimulatorCatalogAsync),
     ("IL-2 Korea standalone launcher resolution", TestIl2KoreaLauncherResolutionAsync),
@@ -564,6 +565,44 @@ static async Task TestNamedUserProfilesAsync()
     Directory.Delete(directory, true);
 }
 
+static Task TestProfilesSurviveContinuationAsync()
+{
+    var current = new AppConfig
+    {
+        ActiveSavedProfileName = "MSFS VR",
+        ApplicationSelections = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["OneDrive"] = true },
+        ServiceSelections = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["SysMain"] = true },
+        SavedProfiles =
+        [
+            new SavedUserProfile
+            {
+                Name = "MSFS VR",
+                SelectedSimulatorId = "msfs2024-store",
+                Options = new OptimizerOptions { Profile = OptimizationProfile.Aggressive },
+                ApplicationSelections = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["OneDrive"] = true }
+            }
+        ]
+    };
+    var pending = new PendingLaunch
+    {
+        SimulatorId = "msfs2024-store",
+        SessionMode = SessionMode.Manual,
+        Options = new OptimizerOptions { Profile = OptimizationProfile.Standard },
+        CustomApplications = []
+    };
+
+    var continued = UserProfileStore.CreateContinuedConfig(current, pending);
+    Equal("MSFS VR", continued.ActiveSavedProfileName);
+    Equal(1, continued.SavedProfiles.Count);
+    Equal(true, continued.ApplicationSelections["onedrive"]);
+    Equal(true, continued.ServiceSelections["sysmain"]);
+    Equal(OptimizationProfile.Standard, continued.Options.Profile);
+
+    current.SavedProfiles[0].Name = "Changed";
+    Equal("MSFS VR", continued.SavedProfiles[0].Name);
+    return Task.CompletedTask;
+}
+
 static Task TestIl2KoreaLauncherResolutionAsync()
 {
     var root = @"D:\Games\Il2Series";
@@ -627,6 +666,12 @@ static Task TestPerformanceTelemetryAsync()
     Equal<double?>(60, PerformanceDashboardMonitor.HoldLastReading(null, 60, TimeSpan.FromMilliseconds(500), TimeSpan.FromSeconds(3)));
     Equal<double?>(72, PerformanceDashboardMonitor.HoldLastReading(72, 60, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(3)));
     Equal<double?>(null, PerformanceDashboardMonitor.HoldLastReading(null, 60, TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(3)));
+    Equal(50d, PerformanceDashboardMonitor.CalculateThreadCpuPercent(
+        TimeSpan.FromSeconds(2.5), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(1)));
+    Equal(100d, PerformanceDashboardMonitor.CalculateThreadCpuPercent(
+        TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(1)));
+    True(Math.Abs(PerformanceDashboardMonitor.CalculateMainThreadFrameTimeMs(94.38, 171.6)!.Value - 5.5) < 0.01);
+    Equal<double?>(null, PerformanceDashboardMonitor.CalculateMainThreadFrameTimeMs(75, null));
     var presentMonByPid = PerformanceDashboardMonitor.BuildPresentMonArguments(1234);
     True(presentMonByPid.Contains("--process_id 1234", StringComparison.Ordinal));
     True(presentMonByPid.Contains("--stop_existing_session", StringComparison.Ordinal));
@@ -664,7 +709,7 @@ static async Task TestPerformanceMonitorSamplingAsync()
     True(finished == completion.Task);
     var sample = await completion.Task;
     if (sample.LogicalProcessorUsage.Count == 0) throw new InvalidOperationException("CPU sampler returned no logical processors.");
-    if (sample.SimulatorThreadCount <= 0) throw new InvalidOperationException("Simulator process thread count was empty.");
+    if (sample.MainThreadFrameTimeMs is < 0) throw new InvalidOperationException("Simulator main-thread frame-time reading was invalid.");
     if (sample.SimulatorMemoryMb <= 0) throw new InvalidOperationException("Simulator process memory reading was empty.");
     await monitor.StopAsync();
     Directory.Delete(directory, true);
@@ -859,7 +904,7 @@ static async Task TestToolbarTelemetryBridgeAsync()
     Equal("Microsoft Flight Simulator 2024", started.Simulator);
 
     var sample = new PerformanceTelemetrySample(
-        DateTimeOffset.UtcNow, 72.5, 70.1, 55.2, 13.8, 32.4, 44.1, 160, 8123,
+        DateTimeOffset.UtcNow, 72.5, 70.1, 55.2, 13.8, 32.4, 44.1, 67.8, 8123,
         [10.0, 20.0, 30.0, 40.0], true, true, "MSFS visual FPS via SimConnect");
     server.Publish(sample);
     var published = await ReceiveToolbarFrameAsync(socket);
@@ -867,14 +912,20 @@ static async Task TestToolbarTelemetryBridgeAsync()
     Equal(1, published.StutterCount);
     Equal(1, published.CpuSpikeCount);
     Equal(4, published.Sample.LogicalProcessorUsage.Count);
-    Equal(3, published.SchemaVersion);
+    Equal(67.8, published.Sample.MainThreadFrameTimeMs);
+    Equal(4, published.SchemaVersion);
     Equal("", published.CpuName);
     Equal("ALL LOGICAL", published.ProcessorGroups.Single().Label);
 
-    server.ResetCounters();
-    var reset = await ReceiveToolbarFrameAsync(socket);
-    Equal(0, reset.StutterCount);
-    Equal(0, reset.CpuSpikeCount);
+    server.ResetStutterCounter();
+    var stutterReset = await ReceiveToolbarFrameAsync(socket);
+    Equal(0, stutterReset.StutterCount);
+    Equal(1, stutterReset.CpuSpikeCount);
+
+    server.ResetCpuSpikeCounter();
+    var spikeReset = await ReceiveToolbarFrameAsync(socket);
+    Equal(0, spikeReset.StutterCount);
+    Equal(0, spikeReset.CpuSpikeCount);
 }
 
 static async Task<DashboardTelemetryFrame> ReceiveToolbarFrameAsync(ClientWebSocket socket)

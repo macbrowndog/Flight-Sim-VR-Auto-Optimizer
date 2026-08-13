@@ -124,7 +124,7 @@ public partial class MainWindow : Window
 
         var simulator = detectedSimulator.Definition;
         _config = ReadConfigFromControls(simulator.Id, timeout);
-        await JsonStore.SaveAtomicAsync(_paths.ConfigFile, _config);
+        await SaveConfigAsync();
 
         var preflight = SessionPreflight.Evaluate(new SessionPreflightContext(
             AdminService.IsAdministrator(),
@@ -444,6 +444,9 @@ public partial class MainWindow : Window
         SavedProfileCombo.Text = _config.ActiveSavedProfileName ?? "";
     }
 
+    private string SelectedProfileName() =>
+        (SavedProfileCombo.SelectedItem as string ?? SavedProfileCombo.Text).Trim();
+
     private void ShowCpuProfile()
     {
         try
@@ -485,7 +488,7 @@ public partial class MainWindow : Window
     private async void SaveCustomButton_Click(object sender, RoutedEventArgs e)
     {
         _config.CustomApplications = ReadCustomApplications();
-        await JsonStore.SaveAtomicAsync(_paths.ConfigFile, _config);
+        await SaveConfigAsync();
         AppendStatus($"Saved {_config.CustomApplications.Count} persistent custom application rule(s).");
         await ScanSystemAsync();
     }
@@ -497,7 +500,7 @@ public partial class MainWindow : Window
         {
             CaptureCurrentControls();
             var saved = UserProfileStore.SaveOrReplace(_config, SavedProfileCombo.Text);
-            await JsonStore.SaveAtomicAsync(_paths.ConfigFile, _config);
+            await SaveConfigAsync();
             RefreshSavedProfiles();
             AppendStatus($"Saved user profile '{saved.Name}' with the current simulator, options, applications, and services.");
             MessageBox.Show(
@@ -532,8 +535,7 @@ public partial class MainWindow : Window
                 FpsGraphLine.Points.Clear();
                 _dashboardStutterCount = 0;
                 _dashboardCpuSpikeCount = 0;
-                DashboardAlertText.Text = "NO SPIKES OR STUTTERS RECORDED";
-                DashboardAlertText.Foreground = (Brush)FindResource("GreenBrush");
+                UpdateDashboardCounterDisplay();
                 DashboardStatusText.Text = $"LIVE — monitoring simulator PID {processId.Value}.";
                 try
                 {
@@ -565,14 +567,20 @@ public partial class MainWindow : Window
         Dispatcher.BeginInvoke(() => UpdateDashboard(sample));
     }
 
-    private void ResetDashboardCountersButton_Click(object sender, RoutedEventArgs e)
+    private void ResetDashboardStuttersButton_Click(object sender, RoutedEventArgs e)
     {
         _dashboardStutterCount = 0;
+        _toolbarTelemetry.ResetStutterCounter();
+        UpdateDashboardCounterDisplay();
+        AppendStatus("Performance dashboard frame-time stutter counter reset.");
+    }
+
+    private void ResetDashboardCpuSpikesButton_Click(object sender, RoutedEventArgs e)
+    {
         _dashboardCpuSpikeCount = 0;
-        _toolbarTelemetry.ResetCounters();
-        DashboardAlertText.Text = "NO SPIKES OR STUTTERS RECORDED";
-        DashboardAlertText.Foreground = (Brush)FindResource("GreenBrush");
-        AppendStatus("Performance dashboard spike and stutter counters reset.");
+        _toolbarTelemetry.ResetCpuSpikeCounter();
+        UpdateDashboardCounterDisplay();
+        AppendStatus("Performance dashboard CPU spike counter reset.");
     }
 
     private void RefreshToolbarPanelStatus()
@@ -646,7 +654,9 @@ public partial class MainWindow : Window
         if (sample.OnePercentLowFps.HasValue) DashOneLow.Text = FormatMetric(sample.OnePercentLowFps, "0.0");
         if (sample.FrameTimeMs.HasValue) DashFrameTime.Text = FormatMetric(sample.FrameTimeMs, "0.0");
         DashProcessCpu.Text = $"{sample.SimulatorCpuPercent:0.0}%";
-        DashThreads.Text = sample.SimulatorThreadCount.ToString();
+        DashMainThread.Text = sample.MainThreadFrameTimeMs.HasValue
+            ? $"{sample.MainThreadFrameTimeMs.Value:0.0} ms"
+            : "—";
         DashMemory.Text = $"{sample.SimulatorMemoryMb:N0} MB";
         DashSystemCpu.Text = $"SYSTEM CPU {sample.SystemCpuPercent:0.0}%";
         DashCpuName.Text = _cpuProfile?.Model ?? "CPU MODEL UNAVAILABLE";
@@ -654,12 +664,16 @@ public partial class MainWindow : Window
         DashCoreText.Text = ProcessorLoadSummarizer.Format(
             ProcessorLoadSummarizer.Summarize(_cpuProfile, sample.LogicalProcessorUsage));
 
-        if (_dashboardStutterCount > 0 || _dashboardCpuSpikeCount > 0)
-        {
-            DashboardAlertText.Text = $"DETECTED: {_dashboardStutterCount} FRAME-TIME STUTTER(S)  /  {_dashboardCpuSpikeCount} CPU SPIKE SAMPLE(S)";
-            DashboardAlertText.Foreground = (Brush)FindResource("RedBrush");
-        }
+        UpdateDashboardCounterDisplay();
         RedrawDashboardGraphs();
+    }
+
+    private void UpdateDashboardCounterDisplay()
+    {
+        DashboardStutterText.Text = $"FRAME-TIME STUTTERS: {_dashboardStutterCount}";
+        DashboardStutterText.Foreground = (Brush)FindResource(_dashboardStutterCount > 0 ? "RedBrush" : "GreenBrush");
+        DashboardCpuSpikeText.Text = $"CPU SPIKE SAMPLES: {_dashboardCpuSpikeCount}";
+        DashboardCpuSpikeText.Foreground = (Brush)FindResource(_dashboardCpuSpikeCount > 0 ? "RedBrush" : "GreenBrush");
     }
 
     private void DashboardGraph_SizeChanged(object sender, SizeChangedEventArgs e) => RedrawDashboardGraphs();
@@ -694,24 +708,36 @@ public partial class MainWindow : Window
     private async void LoadProfileButton_Click(object sender, RoutedEventArgs e)
     {
         if (_coordinator.IsRunning) return;
-        var name = SavedProfileCombo.Text.Trim();
+        var name = SelectedProfileName();
         if (!UserProfileStore.TryApply(_config, name))
         {
             MessageBox.Show("Choose a saved profile first.", "Load user profile", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
-        await JsonStore.SaveAtomicAsync(_paths.ConfigFile, _config);
+        await SaveConfigAsync();
         ApplyOptionsToControls();
         ShowCpuProfile();
         AppendStatus($"Loaded user profile '{_config.ActiveSavedProfileName}'. Rescanning to apply its application and service choices.");
         await ScanSystemAsync();
+        var selectedApplications = _applications.Count(item => item.Selected);
+        var selectedServices = _services.Count(item => item.Selected);
+        MessageBox.Show(
+            $"User profile '{_config.ActiveSavedProfileName}' loaded successfully.\n\n" +
+            $"Simulator: {(SimulatorCombo.SelectedItem as DetectedSimulator)?.Name ?? "Not detected"}\n" +
+            $"Workflow: {_config.SessionMode}\n" +
+            $"Optimization: {_config.Options.Profile}\n" +
+            $"Selected applications: {selectedApplications}\n" +
+            $"Selected services: {selectedServices}",
+            "Profile loaded successfully",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
     }
 
     private async void DeleteProfileButton_Click(object sender, RoutedEventArgs e)
     {
         if (_coordinator.IsRunning) return;
-        var name = SavedProfileCombo.Text.Trim();
+        var name = SelectedProfileName();
         if (!_config.SavedProfiles.Any(profile => profile.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
         {
             MessageBox.Show("Choose a saved profile first.", "Delete user profile", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -721,7 +747,7 @@ public partial class MainWindow : Window
             return;
 
         UserProfileStore.Delete(_config, name);
-        await JsonStore.SaveAtomicAsync(_paths.ConfigFile, _config);
+        await SaveConfigAsync();
         RefreshSavedProfiles();
         AppendStatus($"Deleted user profile '{name}'. Current on-screen settings were left unchanged.");
     }
@@ -796,6 +822,7 @@ public partial class MainWindow : Window
     private void ModeCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
         UpdateModeDescription();
+        if (_applyingConfig) return;
         if (_applications.Count == 0 && _services.Count == 0) return;
         if (ModeCombo.SelectedItem is SessionMode.Automatic)
             SelectAllStoppableItems();
@@ -805,6 +832,7 @@ public partial class MainWindow : Window
 
     private void ContentCreatorCheck_Changed(object sender, RoutedEventArgs e)
     {
+        if (_applyingConfig) return;
         if (_applications.Count == 0 && _services.Count == 0) return;
         if (ModeCombo.SelectedItem is SessionMode.Automatic)
             SelectAllStoppableItems();
@@ -924,14 +952,22 @@ public partial class MainWindow : Window
 
     private async Task SaveSelectionPreferencesAsync()
     {
-        await _configSaveLock.WaitAsync();
         try
         {
-            await JsonStore.SaveAtomicAsync(_paths.ConfigFile, _config);
+            await SaveConfigAsync();
         }
         catch (Exception exception)
         {
             AppendStatus("Unable to save application/service selections: " + exception.Message);
+        }
+    }
+
+    private async Task SaveConfigAsync()
+    {
+        await _configSaveLock.WaitAsync();
+        try
+        {
+            await JsonStore.SaveAtomicAsync(_paths.ConfigFile, _config);
         }
         finally
         {
@@ -980,15 +1016,7 @@ public partial class MainWindow : Window
         try
         {
             var pending = await JsonStore.LoadRequiredAsync<PendingLaunch>(_paths.PendingLaunchFile);
-            _config = new AppConfig
-            {
-                SelectedSimulatorId = pending.SimulatorId,
-                SessionMode = pending.SessionMode,
-                Options = pending.Options,
-                CustomApplications = pending.CustomApplications.ToList(),
-                ApplicationSelections = new Dictionary<string, bool>(_config.ApplicationSelections, StringComparer.OrdinalIgnoreCase),
-                ServiceSelections = new Dictionary<string, bool>(_config.ServiceSelections, StringComparer.OrdinalIgnoreCase)
-            };
+            _config = UserProfileStore.CreateContinuedConfig(_config, pending);
             ApplyOptionsToControls();
             SimulatorCombo.SelectedItem = SimulatorCombo.Items.Cast<DetectedSimulator>()
                 .FirstOrDefault(item => item.Definition.Id == pending.SimulatorId);

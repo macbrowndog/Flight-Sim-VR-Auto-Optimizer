@@ -93,7 +93,7 @@ public sealed record PerformanceTelemetrySample(
     double? FrameTimeMs,
     double SystemCpuPercent,
     double SimulatorCpuPercent,
-    int SimulatorThreadCount,
+    double? MainThreadFrameTimeMs,
     long SimulatorMemoryMb,
     IReadOnlyList<double> LogicalProcessorUsage,
     bool CpuSpike,
