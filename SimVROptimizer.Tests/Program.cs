@@ -1,3 +1,7 @@
+using System.Net.Sockets;
+using System.Net.WebSockets;
+using System.Text;
+using System.Text.Json;
 using SimVROptimizer.Core;
 
 var tests = new (string Name, Func<Task> Run)[]
@@ -11,20 +15,83 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Packaged application restart safety", TestPackagedApplicationRestartSafetyAsync),
     ("Denied service stop is non-fatal", TestDeniedServiceStopAsync),
     ("CPU topology scan", TestCpuTopologyAsync),
+    ("CPU topology strategy", TestCpuTopologyStrategyAsync),
+    ("Processor load summaries", TestProcessorLoadSummariesAsync),
     ("Optimization profiles", TestOptimizationProfilesAsync),
     ("Automatic selection policy", TestAutomaticSelectionPolicyAsync),
+    ("Application classification", TestApplicationClassificationAsync),
+    ("Service classification", TestServiceClassificationAsync),
     ("Selection state notification", TestSelectionStateNotificationAsync),
     ("Saved selection preferences", TestSavedSelectionPreferencesAsync),
+    ("Named user profiles", TestNamedUserProfilesAsync),
     ("Persistent custom application rule", TestCustomApplicationRuleAsync),
     ("Ten simulator configurations", TestSimulatorCatalogAsync),
     ("IL-2 Korea standalone launcher resolution", TestIl2KoreaLauncherResolutionAsync),
     ("MSFS 2024 FastLaunch plans", TestMsfs2024FastLaunchAsync),
+    ("VR runtime shutdown policy", TestVrRuntimeShutdownPolicyAsync),
+    ("Performance telemetry calculations", TestPerformanceTelemetryAsync),
+    ("Performance monitor sampling", TestPerformanceMonitorSamplingAsync),
+    ("VR toolbar telemetry bridge", TestToolbarTelemetryBridgeAsync),
+    ("VR toolbar package installer", TestToolbarPackageInstallerAsync),
     ("Log rotation", TestLogRotationAsync),
     ("Pending launch roundtrip", TestPendingLaunchRoundtripAsync),
+    ("Recovery journal owner detection", TestRecoveryJournalOwnerDetectionAsync),
+    ("Session safety pre-check", TestSessionPreflightAsync),
     ("Dry-run makes no journal", TestDryRunAsync),
     ("Transactional restore", TestTransactionalRestoreAsync),
+    ("Failed restore verification retains journal", TestRestoreVerificationFailureAsync),
+    ("Applications remain closed after restore", TestApplicationLeftClosedAsync),
     ("Corrupt recovery journal is retained", TestCorruptJournalAsync)
 };
+
+static Task TestSessionPreflightAsync()
+{
+    var simulator = new SimulatorDefinition("test", "Test Simulator", ["test"], LaunchKind.Uri, "test://launch");
+    var safeApp = new RunningAppCandidate
+    {
+        ProcessName = "safeapp", DisplayName = "Safe App", Impact = ImpactLevel.Medium,
+        Reason = "Test", InstanceCount = 1, MemoryMb = 10, RestartCommand = "safeapp.exe", CanStop = true,
+        Classification = WorkloadClassification.Recommended,
+        Selected = true
+    };
+    var protectedService = new ServiceCandidate
+    {
+        ServiceName = "Protected", DisplayName = "Protected", Impact = ImpactLevel.Low,
+        Reason = "Test", CanStop = false
+    };
+
+    var ready = SessionPreflight.Evaluate(new SessionPreflightContext(
+        true, false, simulator, new(VrRuntimePreference.None, true, false, "None selected."),
+        [safeApp], [protectedService], OptimizationProfile.Standard));
+    True(ready.CanProceed);
+    Equal(0, ready.BlockedCount);
+
+    var blocked = SessionPreflight.Evaluate(new SessionPreflightContext(
+        false, true, null, new(VrRuntimePreference.PimaxPlay, false, false, "Launcher missing."),
+        [safeApp], [protectedService], OptimizationProfile.Standard));
+    True(!blocked.CanProceed);
+    Equal(3, blocked.BlockedCount);
+    True(blocked.WarningCount == 1);
+    return Task.CompletedTask;
+}
+
+static Task TestRecoveryJournalOwnerDetectionAsync()
+{
+    using var current = System.Diagnostics.Process.GetCurrentProcess();
+    var active = new SessionJournal
+    {
+        OwnerProcessId = current.Id,
+        OwnerProcessStartedAtUtc = current.StartTime.ToUniversalTime()
+    };
+    var stale = new SessionJournal
+    {
+        OwnerProcessId = int.MaxValue,
+        OwnerProcessStartedAtUtc = DateTimeOffset.UtcNow.AddDays(-1)
+    };
+    True(RecoveryJournalInspector.IsOwnerProcessActive(active));
+    True(!RecoveryJournalInspector.IsOwnerProcessActive(stale));
+    return Task.CompletedTask;
+}
 
 var failures = 0;
 foreach (var test in tests)
@@ -89,9 +156,12 @@ static async Task TestImpactServiceScanAsync()
     True(result.Applications.All(application => !string.IsNullOrWhiteSpace(application.DisplayName)));
     Equal(10, result.Services.Count);
     True(result.Services.Single(service => service.ServiceName == "NahimicService").CanStop);
+    Equal(WorkloadClassification.Recommended, result.Services.Single(service => service.ServiceName == "NahimicService").Classification);
     True(!result.Services.Single(service => service.ServiceName == "BITS").CanStop);
+    Equal(WorkloadClassification.Protected, result.Services.Single(service => service.ServiceName == "BITS").Classification);
     Equal(ImpactLevel.Medium, result.Services.Single(service => service.ServiceName.StartsWith("GoogleUpdater", StringComparison.Ordinal)).Impact);
     True(result.Services.Single(service => service.ServiceName == "Apple Mobile Device Service").CanStop);
+    Equal(WorkloadClassification.Recommended, result.Services.Single(service => service.ServiceName == "Apple Mobile Device Service").Classification);
     Equal(ImpactLevel.Low, result.Services.Single(service => service.ServiceName == "DiagTrack").Impact);
     True(!result.Services.Single(service => service.ServiceName == "MDCoreSvc").CanStop);
     True(!result.Services.Single(service => service.ServiceName == "GameInputRedistService").CanStop);
@@ -158,10 +228,10 @@ static Task TestCpuTopologyAsync()
 
 static Task TestAutomaticSelectionPolicyAsync()
 {
-    var restartable = new RunningAppCandidate { ProcessName = "Restartable", DisplayName = "Restartable", Impact = ImpactLevel.Medium, Reason = "test", InstanceCount = 1, MemoryMb = 1, RestartCommand = "exe:C:\\restartable.exe", CanStop = true };
-    var lowImpact = new RunningAppCandidate { ProcessName = "LowImpact", DisplayName = "LowImpact", Impact = ImpactLevel.Low, Reason = "test", InstanceCount = 1, MemoryMb = 1, RestartCommand = "exe:C:\\low.exe", CanStop = true };
-    var manualRestart = new RunningAppCandidate { ProcessName = "Manual", DisplayName = "Manual", Impact = ImpactLevel.Low, Reason = "test", InstanceCount = 1, MemoryMb = 1, RestartCommand = "none:", CanStop = true };
-    var protectedApp = new RunningAppCandidate { ProcessName = "Protected", DisplayName = "Protected", Impact = ImpactLevel.Low, Reason = "test", InstanceCount = 1, MemoryMb = 1, RestartCommand = "exe:C:\\protected.exe", CanStop = false };
+    var restartable = new RunningAppCandidate { ProcessName = "Restartable", DisplayName = "Restartable", Impact = ImpactLevel.Medium, Reason = "test", InstanceCount = 1, MemoryMb = 1, RestartCommand = "exe:C:\\restartable.exe", CanStop = true, Classification = WorkloadClassification.Recommended };
+    var lowImpact = new RunningAppCandidate { ProcessName = "LowImpact", DisplayName = "LowImpact", Impact = ImpactLevel.Low, Reason = "test", InstanceCount = 1, MemoryMb = 1, RestartCommand = "exe:C:\\low.exe", CanStop = true, Classification = WorkloadClassification.Optional };
+    var manualRestart = new RunningAppCandidate { ProcessName = "Manual", DisplayName = "Manual", Impact = ImpactLevel.Low, Reason = "test", InstanceCount = 1, MemoryMb = 1, RestartCommand = "none:", CanStop = true, Classification = WorkloadClassification.Recommended };
+    var protectedApp = new RunningAppCandidate { ProcessName = "Protected", DisplayName = "Protected", Impact = ImpactLevel.Low, Reason = "test", InstanceCount = 1, MemoryMb = 1, RestartCommand = "exe:C:\\protected.exe", CanStop = false, Classification = WorkloadClassification.Protected };
     var stoppableService = new ServiceCandidate { ServiceName = "Stoppable", DisplayName = "Stoppable", Impact = ImpactLevel.Medium, Reason = "test", CanStop = true };
     var protectedService = new ServiceCandidate { ServiceName = "Protected", DisplayName = "Protected", Impact = ImpactLevel.Low, Reason = "test", CanStop = false };
 
@@ -174,7 +244,7 @@ static Task TestAutomaticSelectionPolicyAsync()
     True(!protectedService.Selected);
 
     SessionSelectionPolicy.SelectAutomatic([lowImpact], [], profile: OptimizationProfile.Aggressive);
-    True(lowImpact.Selected);
+    True(!lowImpact.Selected);
 
     var obs = new RunningAppCandidate { ProcessName = "obs64", DisplayName = "OBS Studio", Impact = ImpactLevel.Medium, Reason = "test", InstanceCount = 1, MemoryMb = 1, RestartCommand = "exe:C:\\obs64.exe", CanStop = true };
     var streamDeckService = new ServiceCandidate { ServiceName = "ElgatoRemoteControlServer", DisplayName = "Elgato Remote Control", Impact = ImpactLevel.Low, Reason = "test", CanStop = true };
@@ -183,6 +253,110 @@ static Task TestAutomaticSelectionPolicyAsync()
     True(!obs.Selected);
     True(stoppableService.Selected);
     True(!streamDeckService.Selected);
+    return Task.CompletedTask;
+}
+
+static Task TestCpuTopologyStrategyAsync()
+{
+    var intelSets = new[]
+    {
+        CpuSet(0, 0, 0, 0, 10),
+        CpuSet(1, 0, 1, 0, 10),
+        CpuSet(2, 0, 2, 1, 10, parked: true),
+        CpuSet(3, 1, 0, 0, 5),
+        CpuSet(4, 1, 1, 1, 5),
+        CpuSet(5, 1, 2, 2, 10, allocated: true),
+        CpuSet(6, 1, 3, 3, 10, realTime: true)
+    };
+    var intel = new CpuProfile("GenuineIntel", "Test Hybrid", true, false, false, true, 6, 7, intelSets);
+    var intelPlan = CpuTopologyPlanner.Create(intel, true);
+    Equal(CpuSchedulingStrategy.IntelPerformanceCpuSets, intelPlan.Strategy);
+    Equal(2, intelPlan.ProcessorGroupCount);
+    Equal("0,1", string.Join(',', intelPlan.CpuSetIds));
+    True(intelPlan.Description.Contains("2 processor groups", StringComparison.Ordinal));
+
+    var disabledPlan = CpuTopologyPlanner.Create(intel, false);
+    Equal(CpuSchedulingStrategy.SchedulerManaged, disabledPlan.Strategy);
+
+    var amdX3d = new CpuProfile("AuthenticAMD", "AMD Ryzen 9 9950X3D", false, true, true, true, 16, 32, intelSets);
+    var amdPlan = CpuTopologyPlanner.Create(amdX3d, true);
+    Equal(CpuSchedulingStrategy.SchedulerManaged, amdPlan.Strategy);
+    True(amdPlan.Description.Contains("cache/CCD safety", StringComparison.Ordinal));
+
+    var unavailableSets = intelSets
+        .Select(item => item with { Parked = item.EfficiencyClass == 10, Allocated = false, RealTime = false })
+        .ToArray();
+    var unavailable = intel with { CpuSets = unavailableSets };
+    var unavailablePlan = CpuTopologyPlanner.Create(unavailable, true);
+    Equal(CpuSchedulingStrategy.SchedulerManaged, unavailablePlan.Strategy);
+    True(unavailablePlan.Description.Contains("parked or reserved", StringComparison.Ordinal));
+    return Task.CompletedTask;
+}
+
+static CpuSetDescriptor CpuSet(
+    uint id,
+    ushort group,
+    byte logicalIndex,
+    byte coreIndex,
+    byte efficiencyClass,
+    bool parked = false,
+    bool allocated = false,
+    bool realTime = false) =>
+    new(id, group, logicalIndex, coreIndex, efficiencyClass, parked, allocated, false, realTime);
+
+static Task TestProcessorLoadSummariesAsync()
+{
+    var cpuSets = Enumerable.Range(0, 32)
+        .Select(index => CpuSet((uint)index, 0, (byte)index, (byte)(index / 2), 10))
+        .ToArray();
+    var amd = new CpuProfile(
+        "AuthenticAMD", "AMD Ryzen 9 9950X3D", false, true, true, false, 16, 32, cpuSets);
+    var amdReadings = Enumerable.Range(0, 32)
+        .Select(index => index < 16 ? 20d : 70d)
+        .ToArray();
+    var amdGroups = ProcessorLoadSummarizer.Summarize(amd, amdReadings);
+    Equal(2, amdGroups.Count);
+    Equal("CCD0", amdGroups[0].Label);
+    Equal(20d, amdGroups[0].AveragePercent);
+    Equal("CCD1", amdGroups[1].Label);
+    Equal(70d, amdGroups[1].AveragePercent);
+
+    var generic = ProcessorLoadSummarizer.Summarize(null, [10d, 40d, 20d]);
+    Equal(1, generic.Count);
+    Equal("ALL LOGICAL", generic[0].Label);
+    Equal(40d, generic[0].PeakPercent);
+    Equal(1, generic[0].PeakLogicalProcessor);
+    True(ProcessorLoadSummarizer.Format(amdGroups).Contains("CCD0", StringComparison.Ordinal));
+    return Task.CompletedTask;
+}
+
+static Task TestApplicationClassificationAsync()
+{
+    var recommended = ApplicationClassifier.Classify("OneDrive", true, true, false, @"exe:C:\Program Files\OneDrive\OneDrive.exe");
+    var optional = ApplicationClassifier.Classify("Discord", true, true, false, @"exe:C:\Users\Test\Discord.exe");
+    var unknown = ApplicationClassifier.Classify("UncataloguedTool", false, true, false, @"exe:C:\Tools\Unknown.exe");
+    var protectedApp = ApplicationClassifier.Classify("MSFS_AutoFPS", true, false, false, @"exe:C:\Tools\MSFS_AutoFPS.exe");
+    var custom = ApplicationClassifier.Classify("MyCustomTool", false, true, true, @"exe:C:\Tools\Custom.exe");
+
+    Equal(WorkloadClassification.Recommended, recommended.Classification);
+    Equal(WorkloadClassification.Optional, optional.Classification);
+    Equal(WorkloadClassification.Unknown, unknown.Classification);
+    Equal(WorkloadClassification.Protected, protectedApp.Classification);
+    Equal(WorkloadClassification.Optional, custom.Classification);
+    return Task.CompletedTask;
+}
+
+static Task TestServiceClassificationAsync()
+{
+    var recommended = ServiceClassifier.Classify("GoogleUpdaterService", true, true);
+    var optional = ServiceClassifier.Classify("SysMain", true, true);
+    var protectedService = ServiceClassifier.Classify("GameInputRedistService", true, false);
+    var unknown = ServiceClassifier.Classify("ThirdPartyMysteryService", false, true);
+
+    Equal(WorkloadClassification.Recommended, recommended.Classification);
+    Equal(WorkloadClassification.Optional, optional.Classification);
+    Equal(WorkloadClassification.Protected, protectedService.Classification);
+    Equal(WorkloadClassification.Unknown, unknown.Classification);
     return Task.CompletedTask;
 }
 
@@ -232,6 +406,7 @@ static async Task TestCustomApplicationRuleAsync()
     var candidate = result.Applications.Single(application => application.ProcessName.Equals(processName, StringComparison.OrdinalIgnoreCase));
     True(candidate.IsCustom);
     Equal("Automatic", candidate.RestartSupport);
+    Equal(WorkloadClassification.Optional, candidate.Classification);
 }
 
 static Task TestSimulatorCatalogAsync()
@@ -336,6 +511,59 @@ static async Task TestSavedSelectionPreferencesAsync()
     Directory.Delete(directory, true);
 }
 
+static async Task TestNamedUserProfilesAsync()
+{
+    var config = new AppConfig
+    {
+        SelectedSimulatorId = "msfs2024-store",
+        SessionMode = SessionMode.Automatic,
+        Options = new OptimizerOptions
+        {
+            Profile = OptimizationProfile.Aggressive,
+            VrRuntime = VrRuntimePreference.PimaxPlay,
+            UseVendorAwareCpuSets = true,
+            LaunchTimeoutSeconds = 240
+        },
+        CustomApplications = [new CustomApplicationRule { ProcessName = "ExampleTool", RestartExecutablePath = @"C:\Tools\ExampleTool.exe" }],
+        ApplicationSelections = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["OneDrive"] = true },
+        ServiceSelections = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["SysMain"] = true }
+    };
+
+    var saved = UserProfileStore.SaveOrReplace(config, "MSFS VR");
+    Equal("MSFS VR", config.ActiveSavedProfileName);
+    Equal(1, config.SavedProfiles.Count);
+    config.Options.Profile = OptimizationProfile.Standard;
+    config.ApplicationSelections["OneDrive"] = false;
+    config.CustomApplications[0].ProcessName = "Changed";
+    Equal(OptimizationProfile.Aggressive, saved.Options.Profile);
+    Equal(true, saved.ApplicationSelections["onedrive"]);
+    Equal("ExampleTool", saved.CustomApplications[0].ProcessName);
+
+    True(UserProfileStore.TryApply(config, "msfs vr"));
+    Equal("msfs2024-store", config.SelectedSimulatorId);
+    Equal(SessionMode.Automatic, config.SessionMode);
+    Equal(OptimizationProfile.Aggressive, config.Options.Profile);
+    Equal(VrRuntimePreference.PimaxPlay, config.Options.VrRuntime);
+    Equal(true, config.ServiceSelections["sysmain"]);
+
+    config.Options.LaunchTimeoutSeconds = 300;
+    UserProfileStore.SaveOrReplace(config, "MSFS VR");
+    Equal(1, config.SavedProfiles.Count);
+    Equal(300, config.SavedProfiles.Single().Options.LaunchTimeoutSeconds);
+
+    var directory = Path.Combine(AppContext.BaseDirectory, "test-data", Guid.NewGuid().ToString("N"));
+    var path = Path.Combine(directory, "profiles.json");
+    await JsonStore.SaveAtomicAsync(path, config);
+    var loaded = await JsonStore.LoadRequiredAsync<AppConfig>(path);
+    Equal("MSFS VR", loaded.ActiveSavedProfileName);
+    Equal(1, loaded.SavedProfiles.Count);
+    Equal(true, loaded.SavedProfiles[0].ApplicationSelections["onedrive"]);
+    True(UserProfileStore.Delete(loaded, "MSFS VR"));
+    Equal(0, loaded.SavedProfiles.Count);
+    Equal<string?>(null, loaded.ActiveSavedProfileName);
+    Directory.Delete(directory, true);
+}
+
 static Task TestIl2KoreaLauncherResolutionAsync()
 {
     var root = @"D:\Games\Il2Series";
@@ -369,6 +597,77 @@ static Task TestMsfs2024FastLaunchAsync()
     var msfs2020 = SimulatorLauncher.CreateLaunchPlan(SimulatorCatalog.Find("msfs2020-steam")!, options);
     Equal("steam://run/1250410", msfs2020.Target);
     return Task.CompletedTask;
+}
+
+static Task TestVrRuntimeShutdownPolicyAsync()
+{
+    var steamVr = VrRuntimeLauncher.GetShutdownPolicy(VrRuntimePreference.SteamVR);
+    Equal(TimeSpan.FromSeconds(30), steamVr.GracefulTimeout);
+    True(!steamVr.AllowForcedTermination);
+    True(steamVr.Method.Contains("graceful", StringComparison.OrdinalIgnoreCase));
+
+    var pimax = VrRuntimeLauncher.GetShutdownPolicy(VrRuntimePreference.PimaxPlay);
+    True(pimax.AllowForcedTermination);
+    True(pimax.GracefulTimeout < steamVr.GracefulTimeout);
+    return Task.CompletedTask;
+}
+
+static Task TestPerformanceTelemetryAsync()
+{
+    var values = PerformanceDashboardMonitor.ParseCsv("game.exe,42,\"Hardware: Independent Flip\",16.667");
+    Equal(4, values.Length);
+    Equal("Hardware: Independent Flip", values[2]);
+    Equal("16.667", values[3]);
+
+    var steady = Enumerable.Repeat(10d, 99).Append(50d).ToArray();
+    var onePercentLow = PerformanceDashboardMonitor.CalculateOnePercentLow(steady);
+    True(onePercentLow.HasValue);
+    Equal(20d, onePercentLow!.Value);
+    Equal<double?>(null, PerformanceDashboardMonitor.CalculateOnePercentLow([16, 17, 16]));
+    Equal<double?>(60, PerformanceDashboardMonitor.HoldLastReading(null, 60, TimeSpan.FromMilliseconds(500), TimeSpan.FromSeconds(3)));
+    Equal<double?>(72, PerformanceDashboardMonitor.HoldLastReading(72, 60, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(3)));
+    Equal<double?>(null, PerformanceDashboardMonitor.HoldLastReading(null, 60, TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(3)));
+    var presentMonByPid = PerformanceDashboardMonitor.BuildPresentMonArguments(1234);
+    True(presentMonByPid.Contains("--process_id 1234", StringComparison.Ordinal));
+    True(presentMonByPid.Contains("--stop_existing_session", StringComparison.Ordinal));
+    True(!presentMonByPid.Contains("--exclude_dropped", StringComparison.Ordinal));
+    var presentMonByName = PerformanceDashboardMonitor.BuildPresentMonArguments(1234, "FlightSimulator2024.exe");
+    True(presentMonByName.Contains("--process_name \"FlightSimulator2024.exe\"", StringComparison.Ordinal));
+    var simConnectDirectory = Path.Combine(Path.GetTempPath(), "simconnect-source-test-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(simConnectDirectory);
+    try
+    {
+        var simulatorPath = Path.Combine(simConnectDirectory, "FlightSimulator2024.exe");
+        var simConnectPath = Path.Combine(simConnectDirectory, "SimConnect_internal.dll");
+        File.WriteAllBytes(simulatorPath, []);
+        File.WriteAllBytes(simConnectPath, []);
+        Equal(simConnectPath, SimConnectFpsSource.FindLibraryNearExecutable(simulatorPath));
+    }
+    finally
+    {
+        Directory.Delete(simConnectDirectory, recursive: true);
+    }
+    return Task.CompletedTask;
+}
+
+static async Task TestPerformanceMonitorSamplingAsync()
+{
+    var directory = Path.Combine(AppContext.BaseDirectory, "test-data", Guid.NewGuid().ToString("N"));
+    var paths = new AppPaths(directory);
+    paths.EnsureCreated();
+    await using var monitor = new PerformanceDashboardMonitor(paths, new FileLogger(paths.LogFile));
+    var completion = new TaskCompletionSource<PerformanceTelemetrySample>(TaskCreationOptions.RunContinuationsAsynchronously);
+    monitor.SampleReady += sample => completion.TrySetResult(sample);
+    using var current = System.Diagnostics.Process.GetCurrentProcess();
+    await monitor.StartAsync(current.Id, false);
+    var finished = await Task.WhenAny(completion.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+    True(finished == completion.Task);
+    var sample = await completion.Task;
+    if (sample.LogicalProcessorUsage.Count == 0) throw new InvalidOperationException("CPU sampler returned no logical processors.");
+    if (sample.SimulatorThreadCount <= 0) throw new InvalidOperationException("Simulator process thread count was empty.");
+    if (sample.SimulatorMemoryMb <= 0) throw new InvalidOperationException("Simulator process memory reading was empty.");
+    await monitor.StopAsync();
+    Directory.Delete(directory, true);
 }
 
 static async Task TestLogRotationAsync()
@@ -439,17 +738,22 @@ static async Task TestTransactionalRestoreAsync()
         if (file == "powercfg.exe" && joined == "/list")
         {
             var created = fixture.Commands.Calls.First(call => call.File == "powercfg.exe" && call.Args.FirstOrDefault() == "/duplicatescheme").Args[2];
-            return Ok("Power Scheme GUID: " + created);
+            var deleted = fixture.Commands.Calls.Any(call => call.File == "powercfg.exe" && call.Args.FirstOrDefault() == "/delete");
+            return Ok(deleted ? "Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e" : "Power Scheme GUID: " + created);
         }
         if (file == "sc.exe" && args.FirstOrDefault() == "query")
         {
             var serviceName = args[1];
-            var wasStopped = fixture.Commands.Calls.Any(call =>
-                call.File == "sc.exe" && string.Join(" ", call.Args) == $"stop {serviceName}");
-            return Ok(wasStopped ? "STATE : 1 STOPPED" : "STATE : 4 RUNNING");
+            var lastStateCommand = fixture.Commands.Calls
+                .Where(call => call.File == "sc.exe" && call.Args.Length > 1 && call.Args[1] == serviceName && call.Args[0] is "stop" or "start")
+                .LastOrDefault();
+            return Ok(lastStateCommand.Args?.FirstOrDefault() == "stop" ? "STATE : 1 STOPPED" : "STATE : 4 RUNNING");
         }
         if (file == "nvidia-smi.exe" && args.FirstOrDefault()?.StartsWith("--query", StringComparison.Ordinal) == true)
-            return Ok("0, Disabled\n1, Enabled");
+        {
+            var restored = fixture.Commands.Calls.Any(call => call.File == "nvidia-smi.exe" && string.Join(" ", call.Args) == "-i 0 -pm 0");
+            return Ok(restored ? "0, Disabled\n1, Enabled" : "0, Disabled\n1, Enabled");
+        }
         return Ok();
     };
 
@@ -470,11 +774,58 @@ static async Task TestTransactionalRestoreAsync()
 
     var journal = await JsonStore.LoadRequiredAsync<SessionJournal>(fixture.Paths.JournalFile);
     Equal(5, journal.Mutations.Count);
-    await fixture.Optimizer.RestoreAsync();
+    var report = await fixture.Optimizer.RestoreAsync();
     True(!File.Exists(fixture.Paths.JournalFile));
+    True(File.Exists(fixture.Paths.RestorationReportFile));
+    True(report.Succeeded);
+    Equal(5, report.RestoredCount);
+    Equal(0, report.FailedCount);
     True(fixture.Commands.Calls.Any(call => call.File == "sc.exe" && string.Join(" ", call.Args) == "start SysMain"));
     True(fixture.Commands.Calls.Any(call => call.File == "nvidia-smi.exe" && string.Join(" ", call.Args) == "-i 0 -pm 0"));
     True(fixture.Commands.Calls.Any(call => call.File == "powercfg.exe" && call.Args.FirstOrDefault() == "/delete"));
+}
+
+static async Task TestRestoreVerificationFailureAsync()
+{
+    var fixture = CreateFixture();
+    var journal = new SessionJournal
+    {
+        SimulatorName = "Test Sim",
+        Mutations =
+        [
+            new StateMutation(MutationKind.PowerPlan, "active", "381b4222-f694-41f0-9685-ff5bb260df2e", "temporary", DateTimeOffset.UtcNow)
+        ]
+    };
+    await JsonStore.SaveAtomicAsync(fixture.Paths.JournalFile, journal);
+    fixture.Commands.Handler = (file, args) => file == "powercfg.exe" && args.FirstOrDefault() == "/getactivescheme"
+        ? Ok("Power Scheme GUID: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        : Ok();
+
+    await ThrowsAsync<InvalidOperationException>(() => fixture.Optimizer.RestoreAsync());
+    True(File.Exists(fixture.Paths.JournalFile));
+    var report = await JsonStore.LoadRequiredAsync<RestorationReport>(fixture.Paths.RestorationReportFile);
+    Equal(1, report.FailedCount);
+    True(!report.Succeeded);
+}
+
+static async Task TestApplicationLeftClosedAsync()
+{
+    var fixture = CreateFixture();
+    var processName = "SimVROptimizerTestProcessThatDoesNotExist";
+    var journal = new SessionJournal
+    {
+        SimulatorName = "Test Sim",
+        Mutations =
+        [
+            new StateMutation(MutationKind.Process, processName, @"exe:C:\Tools\TestApp.exe", "stopped", DateTimeOffset.UtcNow)
+        ]
+    };
+    await JsonStore.SaveAtomicAsync(fixture.Paths.JournalFile, journal);
+    var report = await fixture.Optimizer.RestoreAsync();
+    True(report.Succeeded);
+    Equal(1, report.LeftClosedCount);
+    Equal(RestorationOutcome.LeftClosed, report.Items.Single().Outcome);
+    True(!File.Exists(fixture.Paths.JournalFile));
 }
 
 static async Task TestCorruptJournalAsync()
@@ -484,6 +835,93 @@ static async Task TestCorruptJournalAsync()
     await File.WriteAllTextAsync(fixture.Paths.JournalFile, "{not-json");
     await ThrowsAsync<System.Text.Json.JsonException>(() => fixture.Optimizer.RestoreAsync());
     True(File.Exists(fixture.Paths.JournalFile));
+}
+
+static async Task TestToolbarTelemetryBridgeAsync()
+{
+    var directory = Path.Combine(AppContext.BaseDirectory, "test-data", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(directory);
+    var portProbe = new TcpListener(System.Net.IPAddress.Loopback, 0);
+    portProbe.Start();
+    var port = ((System.Net.IPEndPoint)portProbe.LocalEndpoint).Port;
+    portProbe.Stop();
+
+    await using var server = new DashboardTelemetryServer(new FileLogger(Path.Combine(directory, "toolbar.log")), port);
+    await server.StartAsync();
+    using var socket = new ClientWebSocket();
+    await socket.ConnectAsync(new Uri(server.Endpoint), CancellationToken.None);
+    var initial = await ReceiveToolbarFrameAsync(socket);
+    True(!initial.SessionActive);
+
+    server.BeginSession("Microsoft Flight Simulator 2024");
+    var started = await ReceiveToolbarFrameAsync(socket);
+    True(started.SessionActive);
+    Equal("Microsoft Flight Simulator 2024", started.Simulator);
+
+    var sample = new PerformanceTelemetrySample(
+        DateTimeOffset.UtcNow, 72.5, 70.1, 55.2, 13.8, 32.4, 44.1, 160, 8123,
+        [10.0, 20.0, 30.0, 40.0], true, true, "MSFS visual FPS via SimConnect");
+    server.Publish(sample);
+    var published = await ReceiveToolbarFrameAsync(socket);
+    Equal(72.5, published.Sample!.Fps);
+    Equal(1, published.StutterCount);
+    Equal(1, published.CpuSpikeCount);
+    Equal(4, published.Sample.LogicalProcessorUsage.Count);
+    Equal(3, published.SchemaVersion);
+    Equal("", published.CpuName);
+    Equal("ALL LOGICAL", published.ProcessorGroups.Single().Label);
+
+    server.ResetCounters();
+    var reset = await ReceiveToolbarFrameAsync(socket);
+    Equal(0, reset.StutterCount);
+    Equal(0, reset.CpuSpikeCount);
+}
+
+static async Task<DashboardTelemetryFrame> ReceiveToolbarFrameAsync(ClientWebSocket socket)
+{
+    var buffer = new byte[16384];
+    var builder = new StringBuilder();
+    WebSocketReceiveResult result;
+    do
+    {
+        result = await socket.ReceiveAsync(buffer, CancellationToken.None);
+        builder.Append(Encoding.UTF8.GetString(buffer, 0, result.Count));
+    } while (!result.EndOfMessage);
+    return JsonSerializer.Deserialize<DashboardTelemetryFrame>(builder.ToString(), new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+}
+
+static async Task TestToolbarPackageInstallerAsync()
+{
+    var root = Path.Combine(AppContext.BaseDirectory, "test-data", Guid.NewGuid().ToString("N"));
+    var packages = Path.Combine(root, "Packages");
+    var community = Path.Combine(packages, "Community");
+    var source = Path.Combine(root, "source", MsfsToolbarPanelInstaller.PackageName);
+    Directory.CreateDirectory(Path.Combine(source, "html_ui"));
+    Directory.CreateDirectory(Path.Combine(source, "ingamepanels"));
+    await File.WriteAllTextAsync(Path.Combine(source, "manifest.json"), "{\"title\":\"FlightDeckTools VR Dashboard\"}");
+    await File.WriteAllTextAsync(Path.Combine(source, "layout.json"), "{\"content\":[]}");
+    await File.WriteAllBytesAsync(Path.Combine(source, "ingamepanels", "panel.spb"), [1, 2, 3]);
+    var userConfig = Path.Combine(root, "UserCfg.opt");
+    await File.WriteAllTextAsync(userConfig, $"InstalledPackagesPath \"{packages}\"");
+
+    var installer = new MsfsToolbarPanelInstaller(source, [userConfig]);
+    var before = installer.GetStatus();
+    True(before.PackageAvailable);
+    True(!before.IsInstalled);
+    Equal(community, before.CommunityFolder);
+
+    var installed = await installer.InstallAsync();
+    True(installed.IsInstalled);
+    True(File.Exists(Path.Combine(installed.TargetDirectory!, "ingamepanels", "panel.spb")));
+
+    await File.WriteAllTextAsync(Path.Combine(source, "html_ui", "updated.txt"), "updated");
+    var updated = await installer.InstallAsync();
+    True(updated.IsInstalled);
+    True(File.Exists(Path.Combine(updated.TargetDirectory!, "html_ui", "updated.txt")));
+
+    var removed = await installer.RemoveAsync();
+    True(!removed.IsInstalled);
+    True(!Directory.Exists(installed.TargetDirectory));
 }
 
 static (TransactionalOptimizer Optimizer, FakeCommandRunner Commands, AppPaths Paths) CreateFixture()

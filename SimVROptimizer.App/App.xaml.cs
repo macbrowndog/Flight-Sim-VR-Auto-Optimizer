@@ -13,7 +13,8 @@ public partial class App : Application
             args.Handled = true;
         };
         var continueSession = e.Args.Any(argument => argument.Equals("--continue-session", StringComparison.OrdinalIgnoreCase));
-        MainWindow = new MainWindow(continueSession);
+        var restoreLastSession = e.Args.Any(argument => argument.Equals("--restore-last-session", StringComparison.OrdinalIgnoreCase));
+        MainWindow = new MainWindow(continueSession, restoreLastSession);
         MainWindow.Show();
     }
 }

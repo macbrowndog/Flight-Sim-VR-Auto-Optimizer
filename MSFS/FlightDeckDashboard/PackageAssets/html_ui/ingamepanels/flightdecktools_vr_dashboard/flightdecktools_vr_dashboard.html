@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="/SCSS/common.css" />
+    <link rel="stylesheet" href="flightdecktools_vr_dashboard.css" />
+    <script type="text/javascript" src="/JS/coherent.js"></script>
+    <script type="text/javascript" src="/JS/common.js"></script>
+    <script type="text/javascript" src="/JS/dataStorage.js"></script>
+    <script type="text/javascript" src="/JS/Services/ToolBarPanels.js"></script>
+    <link rel="import" href="/templates/ingameUi/ingameUi.html" />
+    <link rel="import" href="/templates/ingameUiHeader/ingameUiHeader.html" />
+    <script type="text/javascript" src="flightdecktools_vr_dashboard.js"></script>
+  </head>
+  <body class="border-box">
+    <ingamepanel-flightdecktools-dashboard>
+      <ingame-ui id="FlightDeckToolsDashboardPanel"
+                 panel-id="PANEL_FLIGHTDECKTOOLS_VR_DASHBOARD"
+                 title="VR OPTIMIZER"
+                 class="ingameUiFrame panelInvisible"
+                 content-fit="true" resize="both" min-width="420" min-height="420">
+        <main id="dashboard">
+          <header class="deck-header">
+            <div>
+              <div class="eyebrow">LIVE PERFORMANCE / SIMULATOR PROCESS</div>
+              <div id="source-status" class="source-status">WAITING FOR VR AUTO-OPTIMIZER</div>
+            </div>
+            <div id="link-state" class="link-state offline"><span></span> OFFLINE</div>
+          </header>
+
+          <section class="metric-grid">
+            <article><label>FPS</label><strong id="fps" class="green">—</strong></article>
+            <article><label>AVERAGE</label><strong id="average">—</strong></article>
+            <article><label>1% LOW</label><strong id="one-low" class="amber">—</strong></article>
+            <article><label>FRAME MS</label><strong id="frame-ms">—</strong></article>
+            <article><label>SIM CPU</label><strong id="sim-cpu" class="amber">—</strong></article>
+            <article><label>THREADS</label><strong id="threads">—</strong></article>
+            <article><label>MEMORY</label><strong id="memory">—</strong></article>
+          </section>
+
+          <section class="graph-grid">
+            <article class="graph-card">
+              <div class="graph-title"><span>FPS / LAST 60 SECONDS</span><span id="fps-scale">0–60</span></div>
+              <canvas id="fps-graph"></canvas>
+            </article>
+            <article class="graph-card">
+              <div class="graph-title"><span>CPU LOAD / LAST 60 SECONDS</span><span>0–100%</span></div>
+              <canvas id="cpu-graph"></canvas>
+              <div class="legend"><span class="amber-key">AMBER system CPU</span><span class="cyan-key">CYAN simulator CPU</span></div>
+            </article>
+          </section>
+
+          <section class="core-card">
+            <div class="graph-title"><span>PROCESSOR LOAD SUMMARY</span><span id="system-cpu">SYSTEM CPU —</span></div>
+            <div id="cpu-name" class="cpu-name">CPU —</div>
+            <div id="cores" class="processor-summary"><div class="empty">Waiting for CPU samples…</div></div>
+          </section>
+
+          <section class="alert-card good">
+            <span id="alerts">NO SPIKES OR STUTTERS RECORDED</span>
+            <button id="reset-alerts" class="reset-alerts nodrag" type="button">RESET COUNTERS</button>
+          </section>
+          <footer>DASHBOARD ONLY / OPTIMIZER CONTROLS REMAIN ON THE WINDOWS DESKTOP</footer>
+        </main>
+        <section id="MainDisplay"></section>
+        <section id="Footer"></section>
+      </ingame-ui>
+    </ingamepanel-flightdecktools-dashboard>
+  </body>
+</html>

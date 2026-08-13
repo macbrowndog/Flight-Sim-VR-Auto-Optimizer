@@ -1,0 +1,7 @@
+<Project Version="2" Name="flightdecktools-vr-dashboard" FolderName="Packages">
+  <OutputDirectory>Build</OutputDirectory>
+  <TemporaryOutputDirectory>_Temp</TemporaryOutputDirectory>
+  <Packages>
+    <Package>PackageDefinitions\flightdecktools-vr-dashboard.xml</Package>
+  </Packages>
+</Project>

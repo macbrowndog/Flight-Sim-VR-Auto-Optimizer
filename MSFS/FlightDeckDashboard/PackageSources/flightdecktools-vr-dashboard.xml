@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="Windows-1252"?>
+<SimBase.Document Type="InGamePanels" version="1,0">
+  <Filename>flightdecktools-vr-dashboard.spb</Filename>
+  <InGamePanels.InGamePanelDefinition
+    id="PANEL_FLIGHTDECKTOOLS_VR_DASHBOARD"
+    Name="VR Optimizer"
+    url="html_UI/ingamePanels/flightdecktools_vr_dashboard/flightdecktools_vr_dashboard.html"
+    resizeDirections="Both"
+    minWidth="42"
+    minHeight="42"
+    defaultWidth="68"
+    defaultHeight="70"
+    defaultTop="12"
+    defaultRight="2"
+    icon="ICON_TOOLBAR_FLIGHTDECKTOOLS_VR_DASHBOARD"
+    buttonVisible="true">
+  </InGamePanels.InGamePanelDefinition>
+</SimBase.Document>

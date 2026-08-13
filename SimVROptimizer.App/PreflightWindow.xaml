@@ -1,0 +1,58 @@
+<Window x:Class="SimVROptimizer.App.PreflightWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Session Safety Check" Width="720" Height="590" MinWidth="620" MinHeight="500"
+        Icon="Assets/AppIcon.ico" Background="{StaticResource BackgroundBrush}"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip" ShowInTaskbar="False">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Margin="0,0,0,14">
+            <TextBlock Text="PRE-FLIGHT / SESSION SAFETY CHECK" FontFamily="Consolas" FontSize="21" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" />
+            <TextBlock Text="Review system readiness before any optimization is applied." Foreground="{StaticResource MutedTextBrush}" Margin="0,5,0,0" />
+        </StackPanel>
+
+        <Border Grid.Row="1" Style="{StaticResource PanelFrame}" Padding="12">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <ItemsControl x:Name="CheckItems">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="8,11">
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                    <Border Background="{Binding StatusBackground}" BorderBrush="{Binding StatusBrush}" BorderThickness="1" Padding="7,4" HorizontalAlignment="Left" VerticalAlignment="Top">
+                                        <TextBlock Text="{Binding StatusText}" Foreground="{Binding StatusBrush}" FontFamily="Consolas" FontWeight="Bold" FontSize="11" />
+                                    </Border>
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="{Binding Name}" FontFamily="Consolas" FontWeight="Bold" Foreground="{StaticResource TextBrush}" />
+                                        <TextBlock Text="{Binding Detail}" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Border>
+
+        <Border Grid.Row="2" x:Name="SummaryPanel" BorderThickness="1" Padding="12" Margin="0,12,0,12">
+            <TextBlock x:Name="SummaryText" FontFamily="Consolas" FontWeight="Bold" TextWrapping="Wrap" />
+        </Border>
+
+        <Grid Grid.Row="3">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <CheckBox x:Name="SaveWorkCheck" Content="I HAVE SAVED WORK IN APPLICATIONS SELECTED TO CLOSE"
+                      Checked="SaveWorkCheck_Changed" Unchecked="SaveWorkCheck_Changed"
+                      Foreground="{StaticResource TextBrush}" VerticalAlignment="Center" />
+            <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="CANCEL" Click="Cancel_Click" Background="#233137" Foreground="{StaticResource TextBrush}" />
+                <Button x:Name="ContinueButton" Content="CONTINUE" Click="Continue_Click" Background="{StaticResource AccentBrush}" Margin="0" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>

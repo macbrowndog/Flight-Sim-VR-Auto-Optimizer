@@ -353,7 +353,8 @@ public sealed class SystemScanner
 
         ApplyCustomApplications(applications, customApplications);
         return applications.Values
-            .OrderBy(candidate => candidate.Impact)
+            .OrderBy(candidate => candidate.Classification)
+            .ThenBy(candidate => candidate.Impact)
             .ThenByDescending(candidate => candidate.MemoryMb)
             .ToArray();
     }
@@ -378,6 +379,8 @@ public sealed class SystemScanner
                 var restartPath = string.IsNullOrWhiteSpace(rule.RestartExecutablePath)
                     ? discoveredPath
                     : Environment.ExpandEnvironmentVariables(rule.RestartExecutablePath.Trim().Trim('"'));
+                var restartCommand = string.IsNullOrWhiteSpace(restartPath) ? "none:" : "exe:" + restartPath;
+                var classification = ApplicationClassifier.Classify(processName, existing is not null, true, true, restartCommand);
                 applications[processName] = new RunningAppCandidate
                 {
                     ProcessName = processName,
@@ -387,9 +390,11 @@ public sealed class SystemScanner
                     InstanceCount = processes.Length,
                     MemoryMb = processes.Sum(process => TryGet(() => process.WorkingSet64, 0L)) / 1024 / 1024,
                     ExecutablePath = discoveredPath,
-                    RestartCommand = string.IsNullOrWhiteSpace(restartPath) ? "none:" : "exe:" + restartPath,
+                    RestartCommand = restartCommand,
                     CanStop = true,
-                    IsCustom = true
+                    IsCustom = true,
+                    Classification = classification.Classification,
+                    ClassificationReason = classification.Reason
                 };
             }
             finally
@@ -418,6 +423,8 @@ public sealed class SystemScanner
                 .Select(process => TryGet(() => process.MainWindowTitle, ""))
                 .FirstOrDefault(title => !string.IsNullOrWhiteSpace(title));
             var restartCommand = ResolveRestartCommand(group.Key, path);
+            var canStop = !IsProtectedApplication(group.Key);
+            var classification = ApplicationClassifier.Classify(group.Key, profile is not null, canStop, false, restartCommand);
             return new RunningAppCandidate
             {
                 ProcessName = group.Key,
@@ -428,7 +435,9 @@ public sealed class SystemScanner
                 MemoryMb = memory,
                 ExecutablePath = path,
                 RestartCommand = restartCommand,
-                CanStop = !IsProtectedApplication(group.Key)
+                CanStop = canStop,
+                Classification = classification.Classification,
+                ClassificationReason = classification.Reason
             };
         }
         finally
@@ -451,18 +460,23 @@ public sealed class SystemScanner
                 var imagePath = GetServiceImagePath(name);
                 var thirdParty = !string.IsNullOrWhiteSpace(imagePath) && !IsWindowsComponent(imagePath);
                 if (profile is null && !thirdParty) return null;
+                var canStop = !IsProtectedService(name);
+                var classification = ServiceClassifier.Classify(name, profile is not null, canStop);
                 return new ServiceCandidate
                 {
                     ServiceName = name,
                     DisplayName = profile?.DisplayName ?? name,
                     Impact = profile?.Level ?? ImpactLevel.Unknown,
                     Reason = profile?.Reason ?? "Running third-party service with no known MSFS-specific impact. Stop only if you understand what depends on it.",
-                    CanStop = !IsProtectedService(name)
+                    CanStop = canStop,
+                    Classification = classification.Classification,
+                    ClassificationReason = classification.Reason
                 };
             })
             .Where(candidate => candidate is not null)
             .Cast<ServiceCandidate>()
-            .OrderBy(candidate => candidate.Impact)
+            .OrderBy(candidate => candidate.Classification)
+            .ThenBy(candidate => candidate.Impact)
             .ThenBy(candidate => candidate.DisplayName)
             .ToArray();
     }

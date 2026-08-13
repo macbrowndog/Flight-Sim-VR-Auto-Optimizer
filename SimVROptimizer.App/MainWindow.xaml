@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="VR Auto-Optimizer — Flight Deck" Width="1160" Height="820" MinWidth="920" MinHeight="700"
         Icon="Assets/AppIcon.ico" Background="{StaticResource BackgroundBrush}" WindowStartupLocation="CenterScreen">
-    <Grid Margin="20">
+    <Grid Margin="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -12,11 +12,11 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <Border Grid.Row="0" Style="{StaticResource PanelFrame}" Padding="16,12" Margin="0,0,0,10">
+        <Border Grid.Row="0" Style="{StaticResource PanelFrame}" Padding="14,8" Margin="0,0,0,7">
             <Grid>
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <StackPanel>
-                    <TextBlock Text="FLIGHT DECK / VR AUTO-OPTIMIZER" FontFamily="Consolas" FontSize="25" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" />
+                    <TextBlock Text="FLIGHT DECK / VR AUTO-OPTIMIZER" FontFamily="Consolas" FontSize="23" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" />
                     <TextBlock Text="SESSION CONTROL • PERFORMANCE MANAGEMENT • AUTOMATIC RECOVERY" FontFamily="Consolas" FontSize="11" Foreground="{StaticResource MutedTextBrush}" Margin="0,4,0,0" />
                 </StackPanel>
                 <Border Grid.Column="1" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Background="#0A1012" Padding="14,8" Margin="10,0">
@@ -32,7 +32,7 @@
             </Grid>
         </Border>
 
-        <Border Grid.Row="1" Style="{StaticResource PanelFrame}" Padding="14" Margin="0,0,0,10">
+        <Border Grid.Row="1" Style="{StaticResource PanelFrame}" Padding="10" Margin="0,0,0,7">
             <Grid>
                 <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <StackPanel Width="160" VerticalAlignment="Center">
@@ -46,7 +46,7 @@
             </Grid>
         </Border>
 
-        <TabControl Grid.Row="2" Background="#090E10" BorderBrush="{StaticResource BorderBrush}" Foreground="{StaticResource TextBrush}">
+        <TabControl x:Name="MainTabs" Grid.Row="2" Background="#090E10" BorderBrush="{StaticResource BorderBrush}" Foreground="{StaticResource TextBrush}" SelectionChanged="MainTabs_SelectionChanged">
             <TabItem Header="SIMULATORS">
                 <DataGrid x:Name="SimulatorGrid" AutoGenerateColumns="False" IsReadOnly="True" Background="#0C1214" Foreground="{StaticResource TextBrush}"
                           RowBackground="#0C1214" AlternatingRowBackground="#111A1D" GridLinesVisibility="Horizontal" BorderThickness="0">
@@ -60,17 +60,37 @@
                 <Grid Background="#0C1214">
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                     <Border Background="#151D20" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="12,8">
-                        <TextBlock Text="APP LOAD CONTROL  /  Selected applications close for the flight session and restart where supported." FontFamily="Consolas" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" />
+                        <TextBlock Text="APP LOAD CONTROL  /  RECOMMENDED = safe default  ·  OPTIONAL = choose manually  ·  PROTECTED = remains running  ·  UNKNOWN = unchecked" FontFamily="Consolas" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" />
                     </Border>
                     <DataGrid x:Name="AppsGrid" Grid.Row="1" AutoGenerateColumns="False" Background="#0C1214" Foreground="{StaticResource TextBrush}"
                               RowBackground="#0C1214" AlternatingRowBackground="#111A1D" GridLinesVisibility="Horizontal" BorderThickness="0">
                         <DataGrid.Columns>
                             <DataGridTemplateColumn Header="CUT" Width="55"><DataGridTemplateColumn.CellTemplate><DataTemplate><CheckBox IsChecked="{Binding Selected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding CanStop}" Click="CandidateSelection_Click" HorizontalAlignment="Center" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
                             <DataGridTextColumn Header="APPLICATION" Binding="{Binding DisplayName}" Width="1.4*" IsReadOnly="True" />
+                            <DataGridTemplateColumn Header="GUIDANCE" Width="112" IsReadOnly="True">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding ClassificationLabel}" FontFamily="Consolas" FontWeight="Bold">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Classification}" Value="Recommended"><Setter Property="Foreground" Value="{StaticResource GreenBrush}" /></DataTrigger>
+                                                        <DataTrigger Binding="{Binding Classification}" Value="Optional"><Setter Property="Foreground" Value="{StaticResource AccentBrush}" /></DataTrigger>
+                                                        <DataTrigger Binding="{Binding Classification}" Value="Protected"><Setter Property="Foreground" Value="{StaticResource CyanBrush}" /></DataTrigger>
+                                                        <DataTrigger Binding="{Binding Classification}" Value="Unknown"><Setter Property="Foreground" Value="{StaticResource RedBrush}" /></DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                             <DataGridTextColumn Header="IMPACT" Binding="{Binding Impact}" Width="75" IsReadOnly="True" />
                             <DataGridTextColumn Header="MEM MB" Binding="{Binding MemoryMb}" Width="78" IsReadOnly="True" />
-                            <DataGridTextColumn Header="RESTART" Binding="{Binding RestartSupport}" Width="82" IsReadOnly="True" />
-                            <DataGridTextColumn Header="OPERATIONAL NOTE" Binding="{Binding Reason}" Width="3*" IsReadOnly="True" />
+                            <DataGridTextColumn Header="AFTER FLIGHT" Binding="{Binding PostFlightState}" Width="100" IsReadOnly="True" />
+                            <DataGridTextColumn Header="WHY THIS GUIDANCE" Binding="{Binding ClassificationReason}" Width="2.2*" IsReadOnly="True" />
+                            <DataGridTextColumn Header="MSFS IMPACT NOTE" Binding="{Binding Reason}" Width="2.8*" IsReadOnly="True" />
                         </DataGrid.Columns>
                     </DataGrid>
                 </Grid>
@@ -79,15 +99,35 @@
                 <Grid Background="#0C1214">
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                     <Border Background="#151D20" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="12,8">
-                        <TextBlock Text="SERVICE LOAD CONTROL  /  Available only in Aggressive profile. Protected flight, VR and Windows services remain locked out." FontFamily="Consolas" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" />
+                        <TextBlock Text="SERVICE LOAD CONTROL  /  RECOMMENDED = safe default  ·  OPTIONAL = review first  ·  PROTECTED = locked  ·  UNKNOWN = understand dependencies" FontFamily="Consolas" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" />
                     </Border>
                     <DataGrid x:Name="ServicesGrid" Grid.Row="1" AutoGenerateColumns="False" Background="#0C1214" Foreground="{StaticResource TextBrush}"
                               RowBackground="#0C1214" AlternatingRowBackground="#111A1D" GridLinesVisibility="Horizontal" BorderThickness="0">
                         <DataGrid.Columns>
                             <DataGridTemplateColumn Header="CUT" Width="55"><DataGridTemplateColumn.CellTemplate><DataTemplate><CheckBox IsChecked="{Binding Selected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding CanStop}" Click="CandidateSelection_Click" HorizontalAlignment="Center" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
                             <DataGridTextColumn Header="SERVICE" Binding="{Binding DisplayName}" Width="1.4*" IsReadOnly="True" />
+                            <DataGridTemplateColumn Header="GUIDANCE" Width="112" IsReadOnly="True">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding ClassificationLabel}" FontFamily="Consolas" FontWeight="Bold">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Classification}" Value="Recommended"><Setter Property="Foreground" Value="{StaticResource GreenBrush}" /></DataTrigger>
+                                                        <DataTrigger Binding="{Binding Classification}" Value="Optional"><Setter Property="Foreground" Value="{StaticResource AccentBrush}" /></DataTrigger>
+                                                        <DataTrigger Binding="{Binding Classification}" Value="Protected"><Setter Property="Foreground" Value="{StaticResource CyanBrush}" /></DataTrigger>
+                                                        <DataTrigger Binding="{Binding Classification}" Value="Unknown"><Setter Property="Foreground" Value="{StaticResource RedBrush}" /></DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                             <DataGridTextColumn Header="IMPACT" Binding="{Binding Impact}" Width="75" IsReadOnly="True" />
-                            <DataGridTextColumn Header="OPERATIONAL NOTE" Binding="{Binding Reason}" Width="3*" IsReadOnly="True" />
+                            <DataGridTextColumn Header="WHY THIS GUIDANCE" Binding="{Binding ClassificationReason}" Width="2.2*" IsReadOnly="True" />
+                            <DataGridTextColumn Header="OPERATIONAL NOTE" Binding="{Binding Reason}" Width="2.8*" IsReadOnly="True" />
                         </DataGrid.Columns>
                     </DataGrid>
                 </Grid>
@@ -103,7 +143,8 @@
                             <CheckBox x:Name="PowerPlanCheck" Content="ULTIMATE PERFORMANCE / temporary" IsChecked="True" />
                             <TextBlock Text="PROCESS PRIORITY" Style="{StaticResource InstrumentLabel}" Margin="0,11,0,6" />
                             <ComboBox x:Name="PriorityCombo" Height="34" />
-                            <CheckBox x:Name="CpuSetsCheck" Content="INTEL HYBRID / performance CPU sets" />
+                            <CheckBox x:Name="CpuSetsCheck" Content="CPU TOPOLOGY / Intel performance-core CPU Sets"
+                                      ToolTip="Uses Windows processor-group-aware CPU Sets on Intel hybrid CPUs only. AMD X3D and existing simulator CPU policies remain scheduler-managed." />
                             <CheckBox x:Name="NvidiaCheck" Content="NVIDIA / temporary persistence" />
                             <CheckBox x:Name="FastLaunchCheck" Content="MSFS 2024 / skip logos + intro (-FastLaunch)" ToolTip="Applies only to Microsoft Flight Simulator 2024 Store and Steam launches." />
                             <CheckBox x:Name="ContentCreatorCheck" Content="CREATOR MODE / keep capture tools online"
@@ -112,7 +153,21 @@
                         </StackPanel>
                     </Border>
                     <Border Grid.Column="1" Margin="8,16,16,16" Style="{StaticResource PanelFrame}" Padding="16">
-                        <StackPanel>
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel Margin="0,0,6,0">
+                            <TextBlock Text="SAVED USER PROFILE" Style="{StaticResource InstrumentLabel}" Margin="0,0,0,6"/>
+                            <ComboBox x:Name="SavedProfileCombo" Height="34" IsEditable="True"
+                                      ToolTip="Choose an existing profile, or type a new name before selecting Save Current." />
+                            <Grid Margin="0,7,0,13">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/><ColumnDefinition Width="7"/>
+                                    <ColumnDefinition Width="*"/><ColumnDefinition Width="7"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Button Content="SAVE CURRENT" Click="SaveProfileButton_Click" Padding="5" Background="#233137" Foreground="{StaticResource AccentBrush}" />
+                                <Button Grid.Column="2" Content="LOAD" Click="LoadProfileButton_Click" Padding="5" Background="#233137" Foreground="{StaticResource CyanBrush}" />
+                                <Button Grid.Column="4" Content="DELETE" Click="DeleteProfileButton_Click" Padding="5" Background="#3A2424" Foreground="#FFB4AE" BorderBrush="{StaticResource RedBrush}" />
+                            </Grid>
                             <TextBlock Text="SESSION CONTROL" Style="{StaticResource InstrumentLabel}" Margin="0,0,0,9"/>
                             <TextBlock Text="WORKFLOW MODE" Style="{StaticResource InstrumentLabel}" Margin="0,7,0,6" />
                             <ComboBox x:Name="ModeCombo" Height="34" SelectionChanged="ModeCombo_SelectionChanged" />
@@ -125,12 +180,14 @@
                                 <TextBlock x:Name="CpuInfoText" TextWrapping="Wrap" Style="{StaticResource ReadoutText}" />
                             </Border>
                         </StackPanel>
+                        </ScrollViewer>
                     </Border>
                 </Grid>
             </TabItem>
             <TabItem Header="ADVANCED">
                 <ScrollViewer Background="#0C1214" VerticalScrollBarVisibility="Auto">
                     <Grid Margin="16">
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                         <Border Style="{StaticResource PanelFrame}" Padding="16">
                             <StackPanel>
@@ -155,28 +212,145 @@
                                 <TextBlock Text="NVIDIA note: persistence mode is supported. Driver-profile ‘Prefer maximum performance’ is not forced because safe restoration requires NVIDIA NVAPI integration." Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,9,0,0"/>
                             </StackPanel>
                         </Border>
+                        <Border Grid.Row="1" Grid.ColumnSpan="3" Style="{StaticResource PanelFrame}" Padding="16" Margin="0,16,0,0">
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="MSFS 2024 / VR TOOLBAR DASHBOARD" Style="{StaticResource InstrumentLabel}" Margin="0,0,0,7"/>
+                                    <TextBlock x:Name="ToolbarPanelStatusText" Text="Checking toolbar package and telemetry bridge…"
+                                               Foreground="{StaticResource CyanBrush}" FontFamily="Consolas" TextWrapping="Wrap" />
+                                    <TextBlock x:Name="ToolbarPanelPathText" Text="COMMUNITY FOLDER / CHECKING"
+                                               Foreground="{StaticResource MutedTextBrush}" FontFamily="Consolas" FontSize="10" TextWrapping="Wrap" Margin="0,7,0,0" />
+                                    <TextBlock Text="The panel is dashboard-only and designed to be opened or pinned from the MSFS toolbar while flying in VR. It receives read-only performance data over 127.0.0.1; it cannot change optimizer settings, applications, or services."
+                                               Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,9,0,0" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="18,0,0,0">
+                                    <Button x:Name="InstallToolbarPanelButton" Content="INSTALL PANEL" Click="InstallToolbarPanelButton_Click"
+                                            Background="#233137" Foreground="{StaticResource AccentBrush}" IsEnabled="False" />
+                                    <Button x:Name="RemoveToolbarPanelButton" Content="REMOVE" Click="RemoveToolbarPanelButton_Click"
+                                            Background="#3A2424" Foreground="#FFB4AE" BorderBrush="{StaticResource RedBrush}" IsEnabled="False" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
                     </Grid>
                 </ScrollViewer>
             </TabItem>
             <TabItem Header="CUSTOM APPS">
                 <Grid Background="#0C1214" Margin="16">
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                    <TextBlock Grid.ColumnSpan="2" Text="PERSISTENT PROCESS CONTROL  /  Process names are checked on every scan. Restart entries use process=executable path." Foreground="{StaticResource MutedTextBrush}" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,0,0,12" />
+                    <Border Background="#111A1D" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Padding="10" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="HOW TO USE CUSTOM APPS" Style="{StaticResource InstrumentLabel}" />
+                            <TextBlock Text="Enter a running process name in the left box, one per line (.exe is optional), then select SAVE LISTS + RESCAN. Applications stopped for a flight remain closed during restoration. The saved-path box is retained for compatibility but automatic reopening is disabled." Foreground="{StaticResource MutedTextBrush}" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,5,0,0" />
+                        </StackPanel>
+                    </Border>
                     <Grid Grid.Row="1">
                         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                         <StackPanel>
-                            <TextBlock Text="CUSTOM KILL LIST / one process name per line" Style="{StaticResource InstrumentLabel}" Margin="0,0,0,7"/>
-                            <TextBox x:Name="CustomKillBox" Height="300" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" Padding="9" TextWrapping="NoWrap" />
+                            <TextBlock Text="1 / APPS TO CLOSE" Style="{StaticResource InstrumentLabel}" />
+                            <TextBlock Text="Process name only. Find it in Task Manager → Details." Foreground="{StaticResource MutedTextBrush}" Margin="0,3,0,7" />
+                            <Grid>
+                                <TextBox x:Name="CustomKillBox" Height="300" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" Padding="9" TextWrapping="NoWrap"
+                                         ToolTip="Enter one process name per line. You may include or omit .exe." />
+                                <TextBlock IsHitTestVisible="False" Margin="10" FontFamily="Consolas" Foreground="#60706D" TextWrapping="Wrap"
+                                           Text="EXAMPLE — not saved&#x0a;&#x0a;CCleaner64&#x0a;OneDrive">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers><DataTrigger Binding="{Binding Text, ElementName=CustomKillBox}" Value=""><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
                         </StackPanel>
                         <StackPanel Grid.Column="2">
-                            <TextBlock Text="CUSTOM RESTART LIST / process=full executable path" Style="{StaticResource InstrumentLabel}" Margin="0,0,0,7"/>
-                            <TextBox x:Name="CustomRestartBox" Height="300" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" Padding="9" TextWrapping="NoWrap" />
+                            <TextBlock Text="2 / SAVED PATH (REOPENING DISABLED)" Style="{StaticResource InstrumentLabel}" />
+                            <TextBlock Text="Kept for compatibility. Apps now remain closed after restoration." Foreground="{StaticResource MutedTextBrush}" Margin="0,3,0,7" />
+                            <Grid>
+                                <TextBox x:Name="CustomRestartBox" Height="300" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" Padding="9" TextWrapping="NoWrap"
+                                         IsReadOnly="True" IsEnabled="False" ToolTip="Automatic application reopening is disabled. Applications remain closed after the flight." />
+                                <TextBlock IsHitTestVisible="False" Margin="10" FontFamily="Consolas" Foreground="#60706D" TextWrapping="Wrap"
+                                           Text="EXAMPLE — not saved&#x0a;&#x0a;CCleaner64=C:\Program Files\CCleaner\CCleaner64.exe&#x0a;&#x0a;OneDrive=%LOCALAPPDATA%\Microsoft\OneDrive\OneDrive.exe">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers><DataTrigger Binding="{Binding Text, ElementName=CustomRestartBox}" Value=""><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
                         </StackPanel>
                     </Grid>
                     <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
                         <Button x:Name="SaveCustomButton" Content="SAVE LISTS + RESCAN" Click="SaveCustomButton_Click" Background="#233137" Foreground="{StaticResource AccentBrush}" />
                     </StackPanel>
                 </Grid>
+            </TabItem>
+            <TabItem x:Name="DashboardTab" Header="DASHBOARD">
+                <ScrollViewer x:Name="DashboardScroll" Background="#0C1214" VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="8">
+                        <Border Style="{StaticResource PanelFrame}" Padding="9" Margin="0,0,0,7">
+                            <DockPanel>
+                                <StackPanel>
+                                    <TextBlock Text="LIVE PERFORMANCE / SIMULATOR PROCESS" Style="{StaticResource InstrumentLabel}" />
+                                    <TextBlock x:Name="DashboardStatusText" Text="STANDBY — monitoring starts when the simulator process is detected." Foreground="{StaticResource MutedTextBrush}" FontFamily="Consolas" Margin="0,5,0,0" TextWrapping="Wrap" />
+                                </StackPanel>
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <CheckBox x:Name="DashboardEnabledCheck" Content="MONITOR SESSION" IsChecked="True" Margin="0,0,18,0" />
+                                    <CheckBox x:Name="DashboardCsvCheck" Content="SAVE CSV" />
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+
+                        <UniformGrid Columns="7" Margin="0,0,0,7">
+                            <Border Style="{StaticResource PanelFrame}" Padding="8,6" Margin="0,0,6,0"><StackPanel><TextBlock Text="FPS" Style="{StaticResource InstrumentLabel}"/><TextBlock x:Name="DashFps" Text="—" FontFamily="Consolas" FontSize="21" Foreground="{StaticResource GreenBrush}"/></StackPanel></Border>
+                            <Border Style="{StaticResource PanelFrame}" Padding="8,6" Margin="0,0,6,0"><StackPanel><TextBlock Text="AVERAGE" Style="{StaticResource InstrumentLabel}"/><TextBlock x:Name="DashAverageFps" Text="—" FontFamily="Consolas" FontSize="21" Foreground="{StaticResource CyanBrush}"/></StackPanel></Border>
+                            <Border Style="{StaticResource PanelFrame}" Padding="8,6" Margin="0,0,6,0"><StackPanel><TextBlock Text="1% LOW" Style="{StaticResource InstrumentLabel}"/><TextBlock x:Name="DashOneLow" Text="—" FontFamily="Consolas" FontSize="21" Foreground="{StaticResource AccentBrush}"/></StackPanel></Border>
+                            <Border Style="{StaticResource PanelFrame}" Padding="8,6" Margin="0,0,6,0"><StackPanel><TextBlock Text="FRAME MS" Style="{StaticResource InstrumentLabel}"/><TextBlock x:Name="DashFrameTime" Text="—" FontFamily="Consolas" FontSize="21" Foreground="{StaticResource CyanBrush}"/></StackPanel></Border>
+                            <Border Style="{StaticResource PanelFrame}" Padding="8,6" Margin="0,0,6,0"><StackPanel><TextBlock Text="SIM CPU" Style="{StaticResource InstrumentLabel}"/><TextBlock x:Name="DashProcessCpu" Text="—" FontFamily="Consolas" FontSize="21" Foreground="{StaticResource AccentBrush}"/></StackPanel></Border>
+                            <Border Style="{StaticResource PanelFrame}" Padding="8,6" Margin="0,0,6,0"><StackPanel><TextBlock Text="THREADS" Style="{StaticResource InstrumentLabel}"/><TextBlock x:Name="DashThreads" Text="—" FontFamily="Consolas" FontSize="21" Foreground="{StaticResource CyanBrush}"/></StackPanel></Border>
+                            <Border Style="{StaticResource PanelFrame}" Padding="8,6"><StackPanel><TextBlock Text="MEMORY" Style="{StaticResource InstrumentLabel}"/><TextBlock x:Name="DashMemory" Text="—" FontFamily="Consolas" FontSize="21" Foreground="{StaticResource CyanBrush}"/></StackPanel></Border>
+                        </UniformGrid>
+
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="10"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <Border Style="{StaticResource PanelFrame}" Padding="8">
+                                <StackPanel>
+                                    <DockPanel Margin="0,0,0,7" LastChildFill="False"><TextBlock Text="FPS / LAST 60 SECONDS" DockPanel.Dock="Left" Style="{StaticResource InstrumentLabel}"/><TextBlock x:Name="DashFpsScale" DockPanel.Dock="Right" Text="0–120" Foreground="{StaticResource MutedTextBrush}" FontFamily="Consolas"/></DockPanel>
+                                    <Canvas x:Name="FpsGraph" Height="105" Background="#05090A" SizeChanged="DashboardGraph_SizeChanged">
+                                        <Polyline x:Name="FpsGraphLine" Stroke="{StaticResource GreenBrush}" StrokeThickness="2" />
+                                    </Canvas>
+                                </StackPanel>
+                            </Border>
+                            <Border Grid.Column="2" Style="{StaticResource PanelFrame}" Padding="8">
+                                <StackPanel>
+                                    <DockPanel Margin="0,0,0,7" LastChildFill="False"><TextBlock Text="CPU LOAD / LAST 60 SECONDS" DockPanel.Dock="Left" Style="{StaticResource InstrumentLabel}"/><TextBlock Text="0–100%" DockPanel.Dock="Right" Foreground="{StaticResource MutedTextBrush}" FontFamily="Consolas"/></DockPanel>
+                                    <Canvas x:Name="CpuGraph" Height="105" Background="#05090A" SizeChanged="DashboardGraph_SizeChanged">
+                                        <Polyline x:Name="SystemCpuGraphLine" Stroke="{StaticResource AccentBrush}" StrokeThickness="2" />
+                                        <Polyline x:Name="ProcessCpuGraphLine" Stroke="{StaticResource CyanBrush}" StrokeThickness="1.5" />
+                                    </Canvas>
+                                    <TextBlock Text="AMBER system CPU  /  CYAN simulator CPU" Foreground="{StaticResource MutedTextBrush}" FontFamily="Consolas" FontSize="10" Margin="0,5,0,0" />
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+
+                        <Border Style="{StaticResource PanelFrame}" Padding="8" Margin="0,7,0,0">
+                            <StackPanel>
+                                <DockPanel LastChildFill="False"><TextBlock Text="PROCESSOR LOAD SUMMARY" DockPanel.Dock="Left" Style="{StaticResource InstrumentLabel}"/><TextBlock x:Name="DashSystemCpu" DockPanel.Dock="Right" Text="SYSTEM CPU —" Foreground="{StaticResource AccentBrush}" FontFamily="Consolas" FontWeight="Bold"/></DockPanel>
+                                <TextBlock x:Name="DashCpuName" Text="CPU —" Foreground="{StaticResource MutedTextBrush}" FontFamily="Consolas" FontSize="11" FontWeight="Bold" Margin="0,5,0,0" />
+                                <TextBlock x:Name="DashCoreText" Text="Waiting for CPU samples…" Foreground="{StaticResource CyanBrush}" FontFamily="Consolas" FontSize="11" TextWrapping="Wrap" Margin="0,5,0,0" />
+                            </StackPanel>
+                        </Border>
+                        <Border x:Name="DashboardAlertBorder" Style="{StaticResource PanelFrame}" Padding="8" Margin="0,7,0,0">
+                            <DockPanel LastChildFill="True">
+                                <Button x:Name="ResetDashboardCountersButton" Content="RESET COUNTERS" DockPanel.Dock="Right"
+                                        Click="ResetDashboardCountersButton_Click" Padding="12,5" Margin="12,0,0,0"
+                                        Background="#17140D" BorderBrush="{StaticResource AccentBrush}" Foreground="{StaticResource AccentBrush}" />
+                                <TextBlock x:Name="DashboardAlertText" Text="NO SPIKES OR STUTTERS RECORDED" Foreground="{StaticResource GreenBrush}" FontFamily="Consolas" FontWeight="Bold" VerticalAlignment="Center" />
+                            </DockPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
             </TabItem>
             <TabItem Header="FLIGHT LOG">
                 <Grid Background="#080D0F" Margin="12">
@@ -191,7 +365,7 @@
             </TabItem>
         </TabControl>
 
-        <Border Grid.Row="3" Style="{StaticResource PanelFrame}" Padding="12,9" Margin="0,10,0,0">
+        <Border Grid.Row="3" Style="{StaticResource PanelFrame}" Padding="10,6" Margin="0,7,0,0">
             <Grid>
                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                 <UniformGrid Columns="5">
@@ -205,7 +379,7 @@
             </Grid>
         </Border>
 
-        <Border Grid.Row="4" Style="{StaticResource PanelFrame}" Padding="12,9" Margin="0,10,0,0">
+        <Border Grid.Row="4" Style="{StaticResource PanelFrame}" Padding="10,6" Margin="0,7,0,0">
             <DockPanel>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <Ellipse x:Name="StateLamp" Width="11" Height="11" Fill="{StaticResource GreenBrush}" Margin="0,0,9,0"/>
@@ -213,6 +387,7 @@
                     <TextBlock x:Name="StateLabel" Text="READY" Style="{StaticResource ReadoutText}" FontWeight="Bold" VerticalAlignment="Center"/>
                 </StackPanel>
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button x:Name="ReportButton" Content="LAST REPORT" Click="ReportButton_Click" Background="#233137" Foreground="{StaticResource CyanBrush}" IsEnabled="False" />
                     <Button x:Name="RestoreButton" Content="RESTORE" Click="RestoreButton_Click" Background="#5A461D" Foreground="{StaticResource AccentBrush}" IsEnabled="False" />
                     <Button x:Name="CancelButton" Content="ABORT / RESTORE" Click="CancelButton_Click" Background="#4D2425" BorderBrush="{StaticResource RedBrush}" Foreground="#FFB4AE" IsEnabled="False" />
                     <Button x:Name="StartButton" Content="START FLIGHT SESSION" Click="StartButton_Click" Background="{StaticResource AccentBrush}" />

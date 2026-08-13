@@ -10,8 +10,11 @@ public partial class MainWindow : Window
 {
     private readonly AppPaths _paths = new();
     private readonly bool _continueSession;
+    private readonly bool _restoreLastSession;
     private readonly SessionCoordinator _coordinator;
     private readonly SystemScanner _scanner;
+    private readonly VrRuntimeLauncher _vrRuntimeLauncher;
+    private readonly RecoveryShortcutService _recoveryShortcuts;
     private AppConfig _config = new();
     private IReadOnlyList<RunningAppCandidate> _applications = [];
     private IReadOnlyList<ServiceCandidate> _services = [];
@@ -20,42 +23,84 @@ public partial class MainWindow : Window
     private bool _allowClose;
     private bool _applyingConfig;
     private readonly SemaphoreSlim _configSaveLock = new(1, 1);
+    private readonly PerformanceDashboardMonitor _dashboardMonitor;
+    private readonly DashboardTelemetryServer _toolbarTelemetry;
+    private readonly MsfsToolbarPanelInstaller _toolbarPanelInstaller;
+    private CpuProfile? _cpuProfile;
+    private readonly Queue<PerformanceTelemetrySample> _dashboardHistory = new();
+    private int _dashboardStutterCount;
+    private int _dashboardCpuSpikeCount;
 
-    public MainWindow(bool continueSession = false)
+    public MainWindow(bool continueSession = false, bool restoreLastSession = false)
     {
         InitializeComponent();
         _continueSession = continueSession;
+        _restoreLastSession = restoreLastSession;
         _paths.EnsureCreated();
         var logger = new FileLogger(_paths.LogFile);
         var commands = new CommandRunner();
         var optimizer = new TransactionalOptimizer(commands, _paths, logger);
-        _coordinator = new SessionCoordinator(optimizer, new SimulatorLauncher(logger), new VrRuntimeLauncher(logger));
+        _vrRuntimeLauncher = new VrRuntimeLauncher(logger);
+        _coordinator = new SessionCoordinator(optimizer, new SimulatorLauncher(logger), _vrRuntimeLauncher);
         _scanner = new SystemScanner(commands);
+        _recoveryShortcuts = new RecoveryShortcutService();
         _coordinator.StatusChanged += AppendStatus;
         _coordinator.ProgressChanged += UpdatePipeline;
+        _coordinator.SimulatorProcessChanged += SimulatorProcessChanged;
+        _dashboardMonitor = new PerformanceDashboardMonitor(_paths, logger);
+        _dashboardMonitor.SampleReady += DashboardSampleReady;
+        try { _cpuProfile = new CpuOptimizer().GetProfile(); }
+        catch { _cpuProfile = null; }
+        _toolbarTelemetry = new DashboardTelemetryServer(logger, cpuProfile: _cpuProfile);
+        _toolbarPanelInstaller = new MsfsToolbarPanelInstaller(
+            Path.Combine(AppContext.BaseDirectory, "MSFS", MsfsToolbarPanelInstaller.PackageName));
         AdminLabel.Text = AdminService.IsAdministrator() ? "ADMINISTRATOR" : "STANDARD USER";
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
+        Closed += MainWindow_Closed;
     }
 
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
+        try
+        {
+            await _toolbarTelemetry.StartAsync();
+        }
+        catch (Exception exception)
+        {
+            AppendStatus("VR toolbar telemetry bridge could not start: " + exception.Message);
+        }
+        RefreshToolbarPanelStatus();
         _config = await JsonStore.LoadOrDefaultAsync(_paths.ConfigFile, () => new AppConfig());
+        if (!string.IsNullOrWhiteSpace(_config.ActiveSavedProfileName))
+            UserProfileStore.TryApply(_config, _config.ActiveSavedProfileName);
         ApplyOptionsToControls();
         ShowCpuProfile();
         UpdateRecoveryState();
-        await ScanSystemAsync();
+        TrySynchronizeRecoveryShortcuts();
+        ReportButton.IsEnabled = File.Exists(_paths.RestorationReportFile);
 
         if (_coordinator.HasRecoveryJournal)
         {
-            AppendStatus("An unfinished session was detected. Restore it before starting another session.");
-            var answer = MessageBox.Show(
-                "An unfinished optimizer session was found. Restore the recorded system state now?",
-                "Recovery required",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Warning);
-            if (answer == MessageBoxResult.Yes) await RestoreRecoveryAsync();
+            if (await IsRecordedSessionStillActiveAsync())
+            {
+                AppendStatus("Recovery journal belongs to another optimizer process that is still running; automatic recovery was not started.");
+                if (_restoreLastSession)
+                    MessageBox.Show("The recorded optimizer session is still running. Recovery has not been started.", "Session still active", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            else
+            {
+                AppendStatus("Interrupted session detected; starting automatic recovery before scanning.");
+                await RestoreRecoveryAsync(automatic: true);
+            }
         }
+        else if (_restoreLastSession)
+        {
+            AppendStatus("Restore shortcut opened, but no unfinished session was found.");
+            MessageBox.Show("No unfinished VR Auto-Optimizer session was found.", "Recovery", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        await ScanSystemAsync();
 
         if (_continueSession && !_coordinator.HasRecoveryJournal)
             await ContinuePendingLaunchAsync();
@@ -80,6 +125,23 @@ public partial class MainWindow : Window
         var simulator = detectedSimulator.Definition;
         _config = ReadConfigFromControls(simulator.Id, timeout);
         await JsonStore.SaveAtomicAsync(_paths.ConfigFile, _config);
+
+        var preflight = SessionPreflight.Evaluate(new SessionPreflightContext(
+            AdminService.IsAdministrator(),
+            _coordinator.HasRecoveryJournal,
+            simulator,
+            _vrRuntimeLauncher.CheckAvailability(_config.Options.VrRuntime),
+            _applications,
+            _services,
+            _config.Options.Profile));
+
+        if (!automaticConfirmed || !preflight.CanProceed)
+        {
+            var safetyWindow = new PreflightWindow(preflight) { Owner = this };
+            if (safetyWindow.ShowDialog() != true) return;
+        }
+
+        AppendStatus($"Session safety check passed with {preflight.WarningCount} warning(s).");
 
         if (_config.SessionMode == SessionMode.Automatic && !automaticConfirmed)
         {
@@ -137,6 +199,7 @@ public partial class MainWindow : Window
         }
 
         SetRunningState(true);
+        TryPrepareRecoveryShortcuts();
         if (_config.Options.ContentCreatorMode)
             AppendStatus("Content Creator Mode active: streaming, capture, audio-routing, and creator helper tools are protected.");
         _sessionCancellation = new CancellationTokenSource();
@@ -151,6 +214,7 @@ public partial class MainWindow : Window
             SetStateDisplay("SESSION ACTIVE", "CyanBrush");
             await _coordinator.RunAsync(simulator, options, _applications, _services, cancellationToken);
             AppendStatus("Simulator exited; restoration completed.");
+            ShowRestorationReport();
         }
         catch (OperationCanceledException)
         {
@@ -160,6 +224,7 @@ public partial class MainWindow : Window
         {
             AppendStatus("ERROR: " + exception.Message);
             MessageBox.Show(exception.Message, "Session error", MessageBoxButton.OK, MessageBoxImage.Error);
+            ShowRestorationReport();
         }
         finally
         {
@@ -167,6 +232,7 @@ public partial class MainWindow : Window
             _sessionCancellation = null;
             SetRunningState(false);
             UpdateRecoveryState();
+            if (!_coordinator.HasRecoveryJournal) TryMarkRecoveryComplete();
             if (!_coordinator.HasRecoveryJournal) CompletePipeline();
         }
     }
@@ -179,11 +245,24 @@ public partial class MainWindow : Window
 
     private async void RestoreButton_Click(object sender, RoutedEventArgs e) => await RestoreRecoveryAsync();
 
-    private async Task RestoreRecoveryAsync()
+    private async void ReportButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var report = await JsonStore.LoadRequiredAsync<RestorationReport>(_paths.RestorationReportFile);
+            new RestorationReportWindow(report, _paths.RestorationReportFile) { Owner = this }.ShowDialog();
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show("The last restoration report could not be opened: " + exception.Message, "Restoration report", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private async Task RestoreRecoveryAsync(bool automatic = false)
     {
         if (!AdminService.IsAdministrator())
         {
-            var answer = MessageBox.Show(
+            var answer = automatic ? MessageBoxResult.Yes : MessageBox.Show(
                 "Recovery requires administrator access. Relaunch as administrator now?",
                 "Recovery",
                 MessageBoxButton.YesNo,
@@ -192,7 +271,7 @@ public partial class MainWindow : Window
             {
                 try
                 {
-                    AdminService.RelaunchElevated();
+                    AdminService.RelaunchElevated("--restore-last-session");
                     _allowClose = true;
                     Application.Current.Shutdown();
                 }
@@ -210,11 +289,14 @@ public partial class MainWindow : Window
             SetStateDisplay("RESTORING", "AccentBrush");
             await _coordinator.RestoreRecoveryAsync();
             AppendStatus("Recovery completed.");
+            TryMarkRecoveryComplete();
+            ShowRestorationReport();
         }
         catch (Exception exception)
         {
             AppendStatus("RECOVERY ERROR: " + exception.Message);
             MessageBox.Show(exception.Message, "Recovery incomplete", MessageBoxButton.OK, MessageBoxImage.Error);
+            ShowRestorationReport();
         }
         finally
         {
@@ -223,9 +305,51 @@ public partial class MainWindow : Window
         }
     }
 
+    private void ShowRestorationReport()
+    {
+        if (_coordinator.LastRestorationReport is not { } report) return;
+        ReportButton.IsEnabled = true;
+        new RestorationReportWindow(report, _paths.RestorationReportFile) { Owner = this }.ShowDialog();
+    }
+
+    private async Task<bool> IsRecordedSessionStillActiveAsync()
+    {
+        try
+        {
+            var journal = await JsonStore.LoadRequiredAsync<SessionJournal>(_paths.JournalFile);
+            return RecoveryJournalInspector.IsOwnerProcessActive(journal);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void TrySynchronizeRecoveryShortcuts()
+    {
+        try { _recoveryShortcuts.Synchronize(_coordinator.HasRecoveryJournal); }
+        catch (Exception exception) { AppendStatus("Recovery shortcut warning: " + exception.Message); }
+    }
+
+    private void TryPrepareRecoveryShortcuts()
+    {
+        try { _recoveryShortcuts.PrepareForSession(); }
+        catch (Exception exception) { AppendStatus("Recovery shortcut warning: " + exception.Message); }
+    }
+
+    private void TryMarkRecoveryComplete()
+    {
+        try { _recoveryShortcuts.MarkRecoveryComplete(); }
+        catch (Exception exception) { AppendStatus("Recovery shortcut cleanup warning: " + exception.Message); }
+    }
+
     private async void MainWindow_Closing(object? sender, CancelEventArgs e)
     {
-        if (_allowClose || _sessionTask is null || _sessionTask.IsCompleted) return;
+        if (_allowClose || _sessionTask is null || _sessionTask.IsCompleted)
+        {
+            await _dashboardMonitor.StopAsync();
+            return;
+        }
         e.Cancel = true;
         _sessionCancellation?.Cancel();
         AppendStatus("Window close requested; restoring the session before exit.");
@@ -259,11 +383,15 @@ public partial class MainWindow : Window
             ApplyNetworkMemoryOptimizations = NetworkMemoryCheck.IsChecked == true,
             ContentCreatorMode = ContentCreatorCheck.IsChecked == true,
             VrRuntime = VrRuntimeCombo.SelectedItem is VrRuntimePreference runtime ? runtime : VrRuntimePreference.None,
-            LaunchTimeoutSeconds = timeout
+            LaunchTimeoutSeconds = timeout,
+            EnablePerformanceDashboard = DashboardEnabledCheck.IsChecked == true,
+            LogPerformanceCsv = DashboardCsvCheck.IsChecked == true
         },
         CustomApplications = ReadCustomApplications(),
         ApplicationSelections = new Dictionary<string, bool>(_config.ApplicationSelections, StringComparer.OrdinalIgnoreCase),
-        ServiceSelections = new Dictionary<string, bool>(_config.ServiceSelections, StringComparer.OrdinalIgnoreCase)
+        ServiceSelections = new Dictionary<string, bool>(_config.ServiceSelections, StringComparer.OrdinalIgnoreCase),
+        ActiveSavedProfileName = _config.ActiveSavedProfileName,
+        SavedProfiles = _config.SavedProfiles
     };
 
     private void ApplyOptionsToControls()
@@ -290,25 +418,50 @@ public partial class MainWindow : Window
         ModeCombo.ItemsSource = Enum.GetValues<SessionMode>();
         ModeCombo.SelectedItem = _config.SessionMode;
         TimeoutBox.Text = _config.Options.LaunchTimeoutSeconds.ToString();
+        DashboardEnabledCheck.IsChecked = _config.Options.EnablePerformanceDashboard;
+        DashboardCsvCheck.IsChecked = _config.Options.LogPerformanceCsv;
         CustomKillBox.Text = string.Join(Environment.NewLine, _config.CustomApplications.Select(rule => rule.ProcessName));
         CustomRestartBox.Text = string.Join(Environment.NewLine, _config.CustomApplications
             .Where(rule => !string.IsNullOrWhiteSpace(rule.RestartExecutablePath))
             .Select(rule => $"{rule.ProcessName}={rule.RestartExecutablePath}"));
+        RefreshSavedProfiles();
         _applyingConfig = false;
         UpdateModeDescription();
+    }
+
+    private async void MainWindow_Closed(object? sender, EventArgs e)
+    {
+        await _toolbarTelemetry.DisposeAsync();
+    }
+
+    private void RefreshSavedProfiles()
+    {
+        if (SavedProfileCombo is null) return;
+        SavedProfileCombo.ItemsSource = _config.SavedProfiles
+            .Select(profile => profile.Name)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        SavedProfileCombo.Text = _config.ActiveSavedProfileName ?? "";
     }
 
     private void ShowCpuProfile()
     {
         try
         {
-            var profile = new CpuOptimizer().GetProfile();
+            var profile = _cpuProfile ?? new CpuOptimizer().GetProfile();
+            _cpuProfile = profile;
+            _toolbarTelemetry.SetCpuProfile(profile);
             var type = profile.IsAmd && profile.IsX3D ? "AMD X3D"
                 : profile.IsIntel && profile.IsHybrid ? "Intel hybrid"
                 : profile.IsAmd ? "AMD"
                 : profile.IsIntel ? "Intel"
                 : "Unknown vendor";
             CpuInfoText.Text = $"Detected CPU: {profile.Model} · {type} · {profile.PhysicalCoreCount} cores / {profile.LogicalProcessorCount} logical processors";
+            DashCpuName.Text = profile.Model;
+            var groups = Math.Max(1, profile.CpuSets.Select(item => item.Group).Distinct().Count());
+            var groupText = groups == 1 ? "1 processor group" : $"{groups} processor groups";
+            var plan = CpuTopologyPlanner.Create(profile, _config.Options.UseVendorAwareCpuSets);
+            CpuInfoText.Text += $" · {groupText}\nCPU strategy: {plan.Description}";
         }
         catch (Exception exception)
         {
@@ -337,6 +490,258 @@ public partial class MainWindow : Window
         await ScanSystemAsync();
     }
 
+    private async void SaveProfileButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_coordinator.IsRunning) return;
+        try
+        {
+            CaptureCurrentControls();
+            var saved = UserProfileStore.SaveOrReplace(_config, SavedProfileCombo.Text);
+            await JsonStore.SaveAtomicAsync(_paths.ConfigFile, _config);
+            RefreshSavedProfiles();
+            AppendStatus($"Saved user profile '{saved.Name}' with the current simulator, options, applications, and services.");
+            MessageBox.Show(
+                $"User profile '{saved.Name}' was saved successfully.\n\nThe simulator, workflow, VR runtime, optimization settings, application and service choices, and custom app list have been stored.",
+                "Profile saved successfully",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+        catch (ArgumentException exception)
+        {
+            MessageBox.Show(exception.Message, "Save user profile", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show("The user profile could not be saved: " + exception.Message, "Save user profile", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void SimulatorProcessChanged(int? processId)
+    {
+        _ = Dispatcher.InvokeAsync(async () =>
+        {
+            if (processId.HasValue && DashboardEnabledCheck.IsChecked == true)
+            {
+                var simulatorName = (SimulatorCombo.SelectedItem as DetectedSimulator)?.Name ?? "Flight simulator";
+                _toolbarTelemetry.BeginSession(simulatorName);
+                _dashboardHistory.Clear();
+                DashFps.Text = "—";
+                DashAverageFps.Text = "—";
+                DashOneLow.Text = "—";
+                DashFrameTime.Text = "—";
+                FpsGraphLine.Points.Clear();
+                _dashboardStutterCount = 0;
+                _dashboardCpuSpikeCount = 0;
+                DashboardAlertText.Text = "NO SPIKES OR STUTTERS RECORDED";
+                DashboardAlertText.Foreground = (Brush)FindResource("GreenBrush");
+                DashboardStatusText.Text = $"LIVE — monitoring simulator PID {processId.Value}.";
+                try
+                {
+                    await _dashboardMonitor.StartAsync(processId.Value, DashboardCsvCheck.IsChecked == true);
+                }
+                catch (Exception exception)
+                {
+                    _toolbarTelemetry.EndSession("Performance monitor could not start: " + exception.Message);
+                    DashboardStatusText.Text = "MONITOR ERROR — " + exception.Message;
+                    AppendStatus("Performance dashboard could not start: " + exception.Message);
+                }
+            }
+            else
+            {
+                await _dashboardMonitor.StopAsync();
+                _toolbarTelemetry.EndSession(processId.HasValue
+                    ? "Performance monitoring is disabled for this session"
+                    : "Flight session complete");
+                DashboardStatusText.Text = processId.HasValue
+                    ? "MONITORING DISABLED FOR THIS SESSION"
+                    : "SESSION COMPLETE — final readings retained.";
+            }
+        });
+    }
+
+    private void DashboardSampleReady(PerformanceTelemetrySample sample)
+    {
+        _toolbarTelemetry.Publish(sample);
+        Dispatcher.BeginInvoke(() => UpdateDashboard(sample));
+    }
+
+    private void ResetDashboardCountersButton_Click(object sender, RoutedEventArgs e)
+    {
+        _dashboardStutterCount = 0;
+        _dashboardCpuSpikeCount = 0;
+        _toolbarTelemetry.ResetCounters();
+        DashboardAlertText.Text = "NO SPIKES OR STUTTERS RECORDED";
+        DashboardAlertText.Foreground = (Brush)FindResource("GreenBrush");
+        AppendStatus("Performance dashboard spike and stutter counters reset.");
+    }
+
+    private void RefreshToolbarPanelStatus()
+    {
+        if (ToolbarPanelStatusText is null) return;
+        var status = _toolbarPanelInstaller.GetStatus();
+        var bridge = _toolbarTelemetry.IsRunning
+            ? $"Telemetry bridge ready at {_toolbarTelemetry.Endpoint}."
+            : "Telemetry bridge is not running.";
+        ToolbarPanelStatusText.Text = status.Detail + "\n" + bridge;
+        ToolbarPanelPathText.Text = status.CommunityFolder is null
+            ? "COMMUNITY FOLDER / NOT DETECTED"
+            : "COMMUNITY FOLDER / " + status.CommunityFolder;
+        InstallToolbarPanelButton.Content = status.IsInstalled ? "UPDATE PANEL" : "INSTALL PANEL";
+        InstallToolbarPanelButton.IsEnabled = status.PackageAvailable && !_coordinator.IsRunning;
+        RemoveToolbarPanelButton.IsEnabled = status.IsInstalled && !_coordinator.IsRunning;
+    }
+
+    private async void InstallToolbarPanelButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var status = await _toolbarPanelInstaller.InstallAsync();
+            AppendStatus("Installed the VR Optimizer toolbar package. Restart MSFS 2024 to load it.");
+            RefreshToolbarPanelStatus();
+            MessageBox.Show(
+                $"The VR Optimizer toolbar panel was installed to:\n\n{status.TargetDirectory}\n\nRestart MSFS 2024, begin a flight, then open VR OPTIMIZER from the in-simulator toolbar.",
+                "VR Optimizer panel installed",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show("The VR Dashboard toolbar panel could not be installed: " + exception.Message,
+                "VR Dashboard installation", MessageBoxButton.OK, MessageBoxImage.Error);
+            RefreshToolbarPanelStatus();
+        }
+    }
+
+    private async void RemoveToolbarPanelButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await _toolbarPanelInstaller.RemoveAsync();
+            AppendStatus("Removed the VR Optimizer toolbar package. Restart MSFS 2024 to unload it.");
+            RefreshToolbarPanelStatus();
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show("The VR Dashboard toolbar panel could not be removed: " + exception.Message,
+                "VR Dashboard removal", MessageBoxButton.OK, MessageBoxImage.Error);
+            RefreshToolbarPanelStatus();
+        }
+    }
+
+    private void MainTabs_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (!ReferenceEquals(e.OriginalSource, MainTabs) || !ReferenceEquals(MainTabs.SelectedItem, DashboardTab)) return;
+        Dispatcher.BeginInvoke(() => DashboardScroll.ScrollToTop());
+    }
+
+    private void UpdateDashboard(PerformanceTelemetrySample sample)
+    {
+        _dashboardHistory.Enqueue(sample);
+        while (_dashboardHistory.Count > 120) _dashboardHistory.Dequeue();
+        if (sample.Stutter) _dashboardStutterCount++;
+        if (sample.CpuSpike) _dashboardCpuSpikeCount++;
+
+        if (sample.Fps.HasValue) DashFps.Text = FormatMetric(sample.Fps, "0.0");
+        if (sample.AverageFps.HasValue) DashAverageFps.Text = FormatMetric(sample.AverageFps, "0.0");
+        if (sample.OnePercentLowFps.HasValue) DashOneLow.Text = FormatMetric(sample.OnePercentLowFps, "0.0");
+        if (sample.FrameTimeMs.HasValue) DashFrameTime.Text = FormatMetric(sample.FrameTimeMs, "0.0");
+        DashProcessCpu.Text = $"{sample.SimulatorCpuPercent:0.0}%";
+        DashThreads.Text = sample.SimulatorThreadCount.ToString();
+        DashMemory.Text = $"{sample.SimulatorMemoryMb:N0} MB";
+        DashSystemCpu.Text = $"SYSTEM CPU {sample.SystemCpuPercent:0.0}%";
+        DashCpuName.Text = _cpuProfile?.Model ?? "CPU MODEL UNAVAILABLE";
+        DashboardStatusText.Text = "LIVE — " + sample.FrameSourceStatus;
+        DashCoreText.Text = ProcessorLoadSummarizer.Format(
+            ProcessorLoadSummarizer.Summarize(_cpuProfile, sample.LogicalProcessorUsage));
+
+        if (_dashboardStutterCount > 0 || _dashboardCpuSpikeCount > 0)
+        {
+            DashboardAlertText.Text = $"DETECTED: {_dashboardStutterCount} FRAME-TIME STUTTER(S)  /  {_dashboardCpuSpikeCount} CPU SPIKE SAMPLE(S)";
+            DashboardAlertText.Foreground = (Brush)FindResource("RedBrush");
+        }
+        RedrawDashboardGraphs();
+    }
+
+    private void DashboardGraph_SizeChanged(object sender, SizeChangedEventArgs e) => RedrawDashboardGraphs();
+
+    private void RedrawDashboardGraphs()
+    {
+        var history = _dashboardHistory.ToArray();
+        if (history.Length == 0) return;
+        var validFps = history.Where(sample => sample.Fps.HasValue).Select(sample => sample.Fps!.Value).ToArray();
+        var fpsMax = Math.Max(60, Math.Ceiling(validFps.DefaultIfEmpty(60).Max() / 30) * 30);
+        DashFpsScale.Text = $"0–{fpsMax:0}";
+        FpsGraphLine.Points = BuildGraphPoints(validFps, FpsGraph.ActualWidth, FpsGraph.ActualHeight, fpsMax);
+        SystemCpuGraphLine.Points = BuildGraphPoints(history.Select(sample => sample.SystemCpuPercent).ToArray(), CpuGraph.ActualWidth, CpuGraph.ActualHeight, 100);
+        ProcessCpuGraphLine.Points = BuildGraphPoints(history.Select(sample => sample.SimulatorCpuPercent).ToArray(), CpuGraph.ActualWidth, CpuGraph.ActualHeight, 100);
+    }
+
+    internal static PointCollection BuildGraphPoints(IReadOnlyList<double> values, double width, double height, double maximum)
+    {
+        var points = new PointCollection();
+        if (values.Count == 0 || width <= 0 || height <= 0 || maximum <= 0) return points;
+        for (var index = 0; index < values.Count; index++)
+        {
+            var x = values.Count == 1 ? width : index * width / (values.Count - 1);
+            var y = height - Math.Clamp(values[index] / maximum, 0, 1) * height;
+            points.Add(new Point(x, y));
+        }
+        return points;
+    }
+
+    private static string FormatMetric(double? value, string format) => value?.ToString(format) ?? "—";
+
+    private async void LoadProfileButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_coordinator.IsRunning) return;
+        var name = SavedProfileCombo.Text.Trim();
+        if (!UserProfileStore.TryApply(_config, name))
+        {
+            MessageBox.Show("Choose a saved profile first.", "Load user profile", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        await JsonStore.SaveAtomicAsync(_paths.ConfigFile, _config);
+        ApplyOptionsToControls();
+        ShowCpuProfile();
+        AppendStatus($"Loaded user profile '{_config.ActiveSavedProfileName}'. Rescanning to apply its application and service choices.");
+        await ScanSystemAsync();
+    }
+
+    private async void DeleteProfileButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_coordinator.IsRunning) return;
+        var name = SavedProfileCombo.Text.Trim();
+        if (!_config.SavedProfiles.Any(profile => profile.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+        {
+            MessageBox.Show("Choose a saved profile first.", "Delete user profile", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (MessageBox.Show($"Delete the saved profile '{name}'?", "Delete user profile", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+            return;
+
+        UserProfileStore.Delete(_config, name);
+        await JsonStore.SaveAtomicAsync(_paths.ConfigFile, _config);
+        RefreshSavedProfiles();
+        AppendStatus($"Deleted user profile '{name}'. Current on-screen settings were left unchanged.");
+    }
+
+    private void CaptureCurrentControls()
+    {
+        foreach (var application in _applications)
+            _config.ApplicationSelections[application.ProcessName] = application.Selected;
+        foreach (var service in _services)
+            _config.ServiceSelections[service.ServiceName] = service.Selected;
+
+        var simulatorId = (SimulatorCombo.SelectedItem as DetectedSimulator)?.Definition.Id
+            ?? _config.SelectedSimulatorId
+            ?? "";
+        var timeout = int.TryParse(TimeoutBox.Text, out var value)
+            ? Math.Clamp(value, 30, 900)
+            : Math.Clamp(_config.Options.LaunchTimeoutSeconds, 30, 900);
+        _config = ReadConfigFromControls(simulatorId, timeout);
+    }
+
     private async Task ScanSystemAsync()
     {
         ScanButton.IsEnabled = false;
@@ -359,8 +764,21 @@ public partial class MainWindow : Window
                 ?? result.Simulators.FirstOrDefault();
             ApplyModeSelection();
             AppendStatus($"Scan complete: {result.Simulators.Count} simulator(s), {result.Applications.Count} app candidate(s), {result.Services.Count} relevant service(s).");
+            var classifications = result.Applications
+                .GroupBy(item => item.Classification)
+                .ToDictionary(group => group.Key, group => group.Count());
+            AppendStatus($"Application guidance: {Count(WorkloadClassification.Recommended)} recommended, {Count(WorkloadClassification.Optional)} optional, {Count(WorkloadClassification.Protected)} protected, {Count(WorkloadClassification.Unknown)} unknown.");
+            var serviceClassifications = result.Services
+                .GroupBy(item => item.Classification)
+                .ToDictionary(group => group.Key, group => group.Count());
+            AppendStatus($"Service guidance: {ServiceCount(WorkloadClassification.Recommended)} recommended, {ServiceCount(WorkloadClassification.Optional)} optional, {ServiceCount(WorkloadClassification.Protected)} protected, {ServiceCount(WorkloadClassification.Unknown)} unknown.");
             if (result.Simulators.Count == 0)
                 AppendStatus("No supported simulator installation was detected. Rescan after installing or repairing its launcher manifest.");
+
+            int Count(WorkloadClassification classification) =>
+                classifications.TryGetValue(classification, out var count) ? count : 0;
+            int ServiceCount(WorkloadClassification classification) =>
+                serviceClassifications.TryGetValue(classification, out var count) ? count : 0;
         }
         catch (Exception exception)
         {
@@ -433,8 +851,8 @@ public partial class MainWindow : Window
             ? ContentCreatorCheck.IsChecked == true
                 ? $"Automatic {profile} optimization is active; streaming, capture, audio-routing, and creator helper tools will remain running."
                 : profile == OptimizationProfile.Aggressive
-                    ? "Aggressive mode selects every safely restartable candidate and applies the stronger CPU/GPU defaults."
-                    : "Standard mode selects high and medium impact candidates while leaving lower-impact background items running."
+                    ? "Aggressive mode selects only Recommended applications, includes approved services, and applies the stronger CPU/GPU defaults. Optional and Unknown applications remain unchecked unless you saved a choice."
+                    : "Standard mode selects only Recommended applications. Optional and Unknown applications remain unchecked unless you saved a choice."
             : profile == OptimizationProfile.Aggressive
                 ? "Choose applications and services manually before starting the session. All changed service states are restored on exit."
                 : "Choose applications manually before starting the session. Service control is available only in Aggressive profile.";
@@ -605,6 +1023,7 @@ public partial class MainWindow : Window
         StartButton.IsEnabled = !running && !_coordinator.HasRecoveryJournal;
         CancelButton.IsEnabled = running && _sessionCancellation is not null;
         RestoreButton.IsEnabled = !running && _coordinator.HasRecoveryJournal;
+        ReportButton.IsEnabled = !running && File.Exists(_paths.RestorationReportFile);
         SimulatorCombo.IsEnabled = !running;
         AppsGrid.IsEnabled = !running;
         ServicesGrid.IsEnabled = !running && ProfileCombo.SelectedItem is OptimizationProfile.Aggressive;
@@ -628,9 +1047,12 @@ public partial class MainWindow : Window
         NetworkMemoryCheck.IsEnabled = !running;
         TimeoutBox.IsEnabled = !running;
         CustomKillBox.IsEnabled = !running;
-        CustomRestartBox.IsEnabled = !running;
+        CustomRestartBox.IsEnabled = false;
         SaveCustomButton.IsEnabled = !running;
         ContentCreatorCheck.IsEnabled = !running;
+        DashboardEnabledCheck.IsEnabled = !running;
+        DashboardCsvCheck.IsEnabled = !running;
+        RefreshToolbarPanelStatus();
         if (!running) SetStateDisplay("READY", "GreenBrush");
     }
 

@@ -21,6 +21,7 @@ public sealed class TransactionalOptimizer
 
     public event Action<string>? StatusChanged;
     public bool HasRecoveryJournal => File.Exists(_paths.JournalFile);
+    public RestorationReport? LastRestorationReport { get; private set; }
 
     public async Task BeginAsync(string simulatorName, OptimizerOptions options, CancellationToken cancellationToken)
     {
@@ -35,7 +36,14 @@ public sealed class TransactionalOptimizer
         CancellationToken cancellationToken)
     {
         if (HasRecoveryJournal) throw new InvalidOperationException("An unfinished session must be restored first.");
-        _journal = new SessionJournal { SimulatorName = simulatorName, DryRun = options.DryRun };
+        using var ownerProcess = Process.GetCurrentProcess();
+        _journal = new SessionJournal
+        {
+            SimulatorName = simulatorName,
+            DryRun = options.DryRun,
+            OwnerProcessId = ownerProcess.Id,
+            OwnerProcessStartedAtUtc = ownerProcess.StartTime.ToUniversalTime()
+        };
         if (!options.DryRun) await PersistAsync(cancellationToken).ConfigureAwait(false);
 
         await ReportAsync(options.DryRun ? "Dry-run: no system settings will be changed." : "Recovery journal created.", cancellationToken);
@@ -66,7 +74,7 @@ public sealed class TransactionalOptimizer
             await StopApplicationAsync(application, options.DryRun, cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task RestoreAsync(CancellationToken cancellationToken = default)
+    public async Task<RestorationReport> RestoreAsync(CancellationToken cancellationToken = default)
     {
         if (_timerResolutionActive)
         {
@@ -85,31 +93,42 @@ public sealed class TransactionalOptimizer
         {
             _journal = null;
             if (File.Exists(_paths.JournalFile)) File.Delete(_paths.JournalFile);
-            return;
+            var emptyReport = new RestorationReport
+            {
+                SessionId = journal?.SessionId ?? Guid.Empty,
+                SimulatorName = journal?.SimulatorName ?? "No active session"
+            };
+            LastRestorationReport = emptyReport;
+            await JsonStore.SaveAtomicAsync(_paths.RestorationReportFile, emptyReport, cancellationToken).ConfigureAwait(false);
+            return emptyReport;
         }
 
-        var failures = new List<string>();
+        var report = new RestorationReport { SessionId = journal.SessionId, SimulatorName = journal.SimulatorName };
         foreach (var mutation in journal.Mutations.AsEnumerable().Reverse())
         {
             try
             {
-                await RestoreMutationAsync(mutation, cancellationToken).ConfigureAwait(false);
+                report.Items.Add(await RestoreAndVerifyMutationAsync(mutation, cancellationToken).ConfigureAwait(false));
             }
             catch (Exception exception)
             {
-                failures.Add($"{mutation.Kind}/{mutation.Target}: {exception.Message}");
+                report.Items.Add(new RestorationItemResult(mutation.Kind, mutation.Target, RestorationOutcome.Failed, exception.Message));
                 await ReportAsync($"Restore failed for {mutation.Target}: {exception.Message}", cancellationToken).ConfigureAwait(false);
             }
         }
 
-        if (failures.Count > 0)
+        LastRestorationReport = report;
+        await JsonStore.SaveAtomicAsync(_paths.RestorationReportFile, report, cancellationToken).ConfigureAwait(false);
+
+        if (!report.Succeeded)
         {
-            throw new InvalidOperationException("Restoration was incomplete. The recovery journal was retained. " + string.Join("; ", failures));
+            throw new InvalidOperationException($"Restoration verification failed for {report.FailedCount} item(s). The recovery journal was retained. Review the restoration report.");
         }
 
         File.Delete(_paths.JournalFile);
         _journal = null;
-        await ReportAsync("Original system state restored.", cancellationToken).ConfigureAwait(false);
+        await ReportAsync($"System state restored and verified: {report.RestoredCount} restored, {report.LeftClosedCount} application(s) left closed, {report.ManualActionCount} manual action(s), 0 failed.", cancellationToken).ConfigureAwait(false);
+        return report;
     }
 
     private async Task ApplyUltimatePowerPlanAsync(bool dryRun, CancellationToken cancellationToken)
@@ -183,9 +202,7 @@ public sealed class TransactionalOptimizer
 
     private async Task StopApplicationAsync(RunningAppCandidate application, bool dryRun, CancellationToken cancellationToken)
     {
-        var recoveryDescription = application.RestartSupport == "Automatic"
-            ? "restart afterward"
-            : "be restarted by Windows or the user when needed";
+        const string recoveryDescription = "remain closed after the flight";
         await ReportAsync($"Application {application.DisplayName}: would stop for this session and {recoveryDescription}.", cancellationToken);
         if (dryRun) return;
 
@@ -212,38 +229,64 @@ public sealed class TransactionalOptimizer
         await ReportAsync($"Stopped {application.DisplayName} for the session.", cancellationToken);
     }
 
-    private async Task RestoreMutationAsync(StateMutation mutation, CancellationToken cancellationToken)
+    private async Task<RestorationItemResult> RestoreAndVerifyMutationAsync(StateMutation mutation, CancellationToken cancellationToken)
     {
         switch (mutation.Kind)
         {
             case MutationKind.PowerPlan:
                 await RequiredCommandAsync("powercfg.exe", ["/setactive", mutation.OriginalValue], cancellationToken).ConfigureAwait(false);
-                break;
+                var activePlan = await RequiredCommandAsync("powercfg.exe", ["/getactivescheme"], cancellationToken).ConfigureAwait(false);
+                if (!string.Equals(OutputParsers.ParsePowerPlanGuid(activePlan.StandardOutput), mutation.OriginalValue, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("The original power plan is not active after restoration.");
+                return Restored(mutation, "Original power plan is active and verified.");
             case MutationKind.CreatedPowerPlan:
                 var plans = await RequiredCommandAsync("powercfg.exe", ["/list"], cancellationToken).ConfigureAwait(false);
                 if (plans.StandardOutput.Contains(mutation.Target, StringComparison.OrdinalIgnoreCase))
                     await RequiredCommandAsync("powercfg.exe", ["/delete", mutation.Target], cancellationToken).ConfigureAwait(false);
-                break;
+                var plansAfterDelete = await RequiredCommandAsync("powercfg.exe", ["/list"], cancellationToken).ConfigureAwait(false);
+                if (plansAfterDelete.StandardOutput.Contains(mutation.Target, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("The temporary power plan still exists after deletion.");
+                return Restored(mutation, "Temporary power plan removal is verified.");
             case MutationKind.Service when mutation.OriginalValue == "running":
                 var service = await _commands.RunAsync("sc.exe", ["query", mutation.Target], cancellationToken).ConfigureAwait(false);
                 if (!service.Succeeded) throw new InvalidOperationException($"Could not query service {mutation.Target} during restoration.");
                 if (!OutputParsers.IsServiceRunning(service.StandardOutput))
                     await RequiredCommandAsync("sc.exe", ["start", mutation.Target], cancellationToken).ConfigureAwait(false);
-                break;
+                for (var attempt = 0; attempt < 15; attempt++)
+                {
+                    var serviceAfterStart = await _commands.RunAsync("sc.exe", ["query", mutation.Target], cancellationToken).ConfigureAwait(false);
+                    if (serviceAfterStart.Succeeded && OutputParsers.IsServiceRunning(serviceAfterStart.StandardOutput))
+                        return Restored(mutation, "Service running state is verified.");
+                    await Task.Delay(1000, cancellationToken).ConfigureAwait(false);
+                }
+                throw new InvalidOperationException($"Service {mutation.Target} is not running 15 seconds after the restart request.");
             case MutationKind.NvidiaPersistence:
                 await RequiredCommandAsync("nvidia-smi.exe", ["-i", mutation.Target, "-pm", mutation.OriginalValue == "enabled" ? "1" : "0"], cancellationToken).ConfigureAwait(false);
-                break;
+                var nvidia = await RequiredCommandAsync("nvidia-smi.exe", ["--query-gpu=index,persistence_mode", "--format=csv,noheader"], cancellationToken).ConfigureAwait(false);
+                var modes = OutputParsers.ParseNvidiaPersistence(nvidia.StandardOutput);
+                var expectedEnabled = mutation.OriginalValue == "enabled";
+                if (!modes.TryGetValue(mutation.Target, out var actualEnabled) || actualEnabled != expectedEnabled)
+                    throw new InvalidOperationException($"GPU {mutation.Target} persistence mode did not return to {mutation.OriginalValue}.");
+                return Restored(mutation, "NVIDIA persistence state is verified.");
             case MutationKind.Process:
                 var runningProcesses = Process.GetProcessesByName(mutation.Target);
                 var isRunning = runningProcesses.Length > 0;
                 foreach (var runningProcess in runningProcesses) runningProcess.Dispose();
-                if (!isRunning) RestartApplication(mutation.OriginalValue);
-                break;
+                if (isRunning) return Restored(mutation, "Application is already running.");
+                return new(mutation.Kind, mutation.Target, RestorationOutcome.LeftClosed,
+                    "Application was intentionally left closed after the flight and was not relaunched.");
             case MutationKind.RegistryValue:
                 RestoreRegistryValue(mutation);
-                break;
+                if (!RegistryValueMatchesOriginal(mutation))
+                    throw new InvalidOperationException("The registry value does not match its recorded original state.");
+                return Restored(mutation, "Registry value restoration is verified.");
+            default:
+                throw new InvalidOperationException($"Unsupported recovery mutation {mutation.Kind}.");
         }
     }
+
+    private static RestorationItemResult Restored(StateMutation mutation, string detail) =>
+        new(mutation.Kind, mutation.Target, RestorationOutcome.Restored, detail);
 
     private async Task FlushDnsCacheAsync(bool dryRun, CancellationToken cancellationToken)
     {
@@ -337,23 +380,18 @@ public sealed class TransactionalOptimizer
         }
     }
 
-    private static void RestartApplication(string restartCommand)
+    private static bool RegistryValueMatchesOriginal(StateMutation mutation)
     {
-        if (restartCommand.StartsWith("exe:", StringComparison.OrdinalIgnoreCase))
-        {
-            var executable = restartCommand[4..];
-            if (ApplicationRestartPolicy.CanLaunchDirectly(executable) && File.Exists(executable))
-                Process.Start(new ProcessStartInfo(executable) { UseShellExecute = true });
-            return;
-        }
-
-        if (restartCommand.StartsWith("shell:", StringComparison.OrdinalIgnoreCase))
-        {
-            var target = restartCommand[6..];
-            var startInfo = new ProcessStartInfo("explorer.exe") { UseShellExecute = true };
-            startInfo.ArgumentList.Add(target);
-            Process.Start(startInfo);
-        }
+        var parts = mutation.Target.Split('|', 3);
+        if (parts.Length != 3 || !Enum.TryParse<RegistryHive>(parts[0], out var hive)) return false;
+        using var baseKey = RegistryKey.OpenBaseKey(hive, RegistryView.Registry64);
+        using var key = baseKey.OpenSubKey(parts[1], writable: false);
+        if (mutation.OriginalValue == "absent")
+            return key is null || !key.GetValueNames().Contains(parts[2], StringComparer.OrdinalIgnoreCase);
+        if (key is null || !key.GetValueNames().Contains(parts[2], StringComparer.OrdinalIgnoreCase)) return false;
+        return EncodeRegistryValue(
+            key.GetValue(parts[2], null, RegistryValueOptions.DoNotExpandEnvironmentNames),
+            key.GetValueKind(parts[2])) == mutation.OriginalValue;
     }
 
     private async Task<CommandResult> RequiredCommandAsync(string fileName, IEnumerable<string> arguments, CancellationToken cancellationToken)

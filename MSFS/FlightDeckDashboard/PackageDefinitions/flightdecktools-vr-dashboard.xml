@@ -1,0 +1,22 @@
+<AssetPackage Name="flightdecktools-vr-dashboard" Version="1.10.0">
+  <ItemSettings>
+    <ContentType>SPB</ContentType>
+    <Title>VR Optimizer</Title>
+    <Manufacturer>FlightDeckTools</Manufacturer>
+    <Creator>Andrew MacBrown</Creator>
+  </ItemSettings>
+  <Flags>
+    <VisibleInStore>false</VisibleInStore>
+    <CanBeReferenced>false</CanBeReferenced>
+  </Flags>
+  <AssetGroups>
+    <AssetGroup Name="flightdecktools-vr-dashboard">
+      <Type>SPB</Type>
+      <Flags>
+        <FSXCompatibility>false</FSXCompatibility>
+      </Flags>
+      <AssetDir>PackageSources\</AssetDir>
+      <OutputDir>ingamepanels\</OutputDir>
+    </AssetGroup>
+  </AssetGroups>
+</AssetPackage>

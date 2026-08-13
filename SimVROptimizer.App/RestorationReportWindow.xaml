@@ -1,0 +1,44 @@
+<Window x:Class="SimVROptimizer.App.RestorationReportWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Restoration Report" Width="850" Height="570" MinWidth="700" MinHeight="450"
+        Icon="Assets/AppIcon.ico" Background="{StaticResource BackgroundBrush}"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+    <Grid Margin="20">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <StackPanel>
+            <TextBlock Text="POST-FLIGHT / RESTORATION REPORT" FontFamily="Consolas" FontSize="21" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" />
+            <TextBlock x:Name="SessionText" Foreground="{StaticResource MutedTextBrush}" FontFamily="Consolas" Margin="0,5,0,0" />
+        </StackPanel>
+        <Border Grid.Row="1" x:Name="SummaryPanel" BorderThickness="1" Padding="12" Margin="0,14,0,12">
+            <TextBlock x:Name="SummaryText" FontFamily="Consolas" FontWeight="Bold" />
+        </Border>
+        <DataGrid Grid.Row="2" x:Name="ReportGrid" AutoGenerateColumns="False" IsReadOnly="True" Background="#0C1214" Foreground="{StaticResource TextBrush}"
+                  RowBackground="#0C1214" AlternatingRowBackground="#111A1D" GridLinesVisibility="Horizontal" BorderBrush="{StaticResource BorderBrush}">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="TYPE" Binding="{Binding Kind}" Width="120" />
+                <DataGridTextColumn Header="TARGET" Binding="{Binding Target}" Width="1.4*" />
+                <DataGridTemplateColumn Header="RESULT" Width="145">
+                    <DataGridTemplateColumn.CellTemplate><DataTemplate>
+                        <TextBlock Text="{Binding Outcome}" FontFamily="Consolas" FontWeight="Bold">
+                            <TextBlock.Style><Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Outcome}" Value="Restored"><Setter Property="Foreground" Value="{StaticResource GreenBrush}" /></DataTrigger>
+                                    <DataTrigger Binding="{Binding Outcome}" Value="LeftClosed"><Setter Property="Foreground" Value="{StaticResource CyanBrush}" /></DataTrigger>
+                                    <DataTrigger Binding="{Binding Outcome}" Value="ManualActionRequired"><Setter Property="Foreground" Value="{StaticResource AccentBrush}" /></DataTrigger>
+                                    <DataTrigger Binding="{Binding Outcome}" Value="Failed"><Setter Property="Foreground" Value="{StaticResource RedBrush}" /></DataTrigger>
+                                </Style.Triggers>
+                            </Style></TextBlock.Style>
+                        </TextBlock>
+                    </DataTemplate></DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTextColumn Header="VERIFICATION DETAIL" Binding="{Binding Detail}" Width="2.5*" />
+            </DataGrid.Columns>
+        </DataGrid>
+        <Grid Grid.Row="3" Margin="0,12,0,0">
+            <TextBlock x:Name="ReportPathText" Foreground="{StaticResource MutedTextBrush}" FontFamily="Consolas" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+            <Button Content="CLOSE REPORT" Click="Close_Click" HorizontalAlignment="Right" Background="{StaticResource AccentBrush}" Margin="0" />
+        </Grid>
+    </Grid>
+</Window>

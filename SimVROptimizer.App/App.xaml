@@ -126,7 +126,11 @@
                     <ControlTemplate TargetType="ComboBox">
                         <Grid>
                             <Border x:Name="ComboBorder" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" />
-                            <ContentPresenter Margin="10,0,38,0" VerticalAlignment="Center" IsHitTestVisible="False" Content="{TemplateBinding SelectionBoxItem}" ContentTemplate="{TemplateBinding ItemTemplate}" TextElement.Foreground="{TemplateBinding Foreground}" />
+                            <ContentPresenter x:Name="SelectedContent" Margin="10,0,38,0" VerticalAlignment="Center" IsHitTestVisible="False" Content="{TemplateBinding SelectionBoxItem}" ContentTemplate="{TemplateBinding ItemTemplate}" TextElement.Foreground="{TemplateBinding Foreground}" />
+                            <TextBox x:Name="PART_EditableTextBox" Visibility="Collapsed" Margin="9,1,38,1"
+                                     Background="Transparent" Foreground="{TemplateBinding Foreground}" CaretBrush="{StaticResource AccentBrush}"
+                                     BorderThickness="0" FontFamily="{TemplateBinding FontFamily}" VerticalContentAlignment="Center"
+                                     Text="{Binding Text, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                             <ToggleButton HorizontalAlignment="Right" Width="36" Background="Transparent" BorderThickness="0" Focusable="False" IsChecked="{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}">
                                 <ToggleButton.Template><ControlTemplate TargetType="ToggleButton"><Border Background="Transparent"><TextBlock Text="▼" Foreground="{StaticResource AccentBrush}" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border></ControlTemplate></ToggleButton.Template>
                             </ToggleButton>
@@ -135,6 +139,7 @@
                             </Popup>
                         </Grid>
                         <ControlTemplate.Triggers>
+                            <Trigger Property="IsEditable" Value="True"><Setter TargetName="SelectedContent" Property="Visibility" Value="Collapsed" /><Setter TargetName="PART_EditableTextBox" Property="Visibility" Value="Visible" /></Trigger>
                             <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="ComboBorder" Property="BorderBrush" Value="{StaticResource AccentBrush}" /></Trigger>
                             <Trigger Property="IsEnabled" Value="False"><Setter TargetName="ComboBorder" Property="Opacity" Value="0.42" /></Trigger>
                         </ControlTemplate.Triggers>

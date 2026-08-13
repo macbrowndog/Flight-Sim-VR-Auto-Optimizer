@@ -4,3 +4,6 @@
 *.user
 *.suo
 artifacts/
+.nuget-scratch/
+outputs/
+MSFS/FlightDeckDashboard/_Temp/

@@ -38,6 +38,8 @@ public sealed class OptimizerOptions
     public bool ContentCreatorMode { get; set; }
     public VrRuntimePreference VrRuntime { get; set; } = VrRuntimePreference.None;
     public int LaunchTimeoutSeconds { get; set; } = 180;
+    public bool EnablePerformanceDashboard { get; set; } = true;
+    public bool LogPerformanceCsv { get; set; }
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
@@ -83,13 +85,38 @@ public enum SessionStage
 
 public sealed record SessionProgress(SessionStage Stage, string Title, string Detail);
 
+public sealed record PerformanceTelemetrySample(
+    DateTimeOffset Timestamp,
+    double? Fps,
+    double? AverageFps,
+    double? OnePercentLowFps,
+    double? FrameTimeMs,
+    double SystemCpuPercent,
+    double SimulatorCpuPercent,
+    int SimulatorThreadCount,
+    long SimulatorMemoryMb,
+    IReadOnlyList<double> LogicalProcessorUsage,
+    bool CpuSpike,
+    bool Stutter,
+    string FrameSourceStatus);
+
+public sealed record ProcessorLoadGroup(
+    string Label,
+    double AveragePercent,
+    double PeakPercent,
+    int LogicalProcessorCount,
+    int PeakLogicalProcessor);
+
 public sealed record CpuSetDescriptor(
     uint Id,
     ushort Group,
     byte LogicalProcessorIndex,
     byte CoreIndex,
     byte EfficiencyClass,
-    bool Parked);
+    bool Parked,
+    bool Allocated,
+    bool AllocatedToTargetProcess,
+    bool RealTime);
 
 public sealed record CpuProfile(
     string Vendor,
@@ -102,6 +129,18 @@ public sealed record CpuProfile(
     int LogicalProcessorCount,
     IReadOnlyList<CpuSetDescriptor> CpuSets);
 
+public enum CpuSchedulingStrategy
+{
+    SchedulerManaged,
+    IntelPerformanceCpuSets
+}
+
+public sealed record CpuOptimizationPlan(
+    CpuSchedulingStrategy Strategy,
+    IReadOnlyList<uint> CpuSetIds,
+    int ProcessorGroupCount,
+    string Description);
+
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ImpactLevel
 {
@@ -110,6 +149,17 @@ public enum ImpactLevel
     Low,
     Unknown
 }
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum WorkloadClassification
+{
+    Recommended,
+    Optional,
+    Protected,
+    Unknown
+}
+
+public sealed record WorkloadClassificationResult(WorkloadClassification Classification, string Reason);
 
 public sealed class DetectedSimulator
 {
@@ -132,7 +182,17 @@ public sealed class RunningAppCandidate : INotifyPropertyChanged
     public required string RestartCommand { get; init; }
     public required bool CanStop { get; init; }
     public bool IsCustom { get; init; }
+    public WorkloadClassification Classification { get; init; } = WorkloadClassification.Unknown;
+    public string ClassificationReason { get; init; } = "Not yet classified.";
+    public string ClassificationLabel => Classification switch
+    {
+        WorkloadClassification.Recommended => "RECOMMENDED",
+        WorkloadClassification.Optional => "OPTIONAL",
+        WorkloadClassification.Protected => "PROTECTED",
+        _ => "UNKNOWN"
+    };
     public string RestartSupport => RestartCommand.StartsWith("none:", StringComparison.OrdinalIgnoreCase) ? "Manual" : "Automatic";
+    public string PostFlightState => "Left closed";
     public bool Selected
     {
         get => _selected;
@@ -174,7 +234,7 @@ public static class SessionSelectionPolicy
         foreach (var application in applications)
             application.Selected = application.CanStop
                 && application.RestartSupport == "Automatic"
-                && (profile == OptimizationProfile.Aggressive || application.IsCustom || application.Impact is ImpactLevel.High or ImpactLevel.Medium)
+                && application.Classification == WorkloadClassification.Recommended
                 && !(contentCreatorMode && IsContentCreatorApplication(application));
         foreach (var service in services)
             service.Selected = profile == OptimizationProfile.Aggressive
@@ -254,6 +314,15 @@ public sealed class ServiceCandidate : INotifyPropertyChanged
     public required ImpactLevel Impact { get; init; }
     public required string Reason { get; init; }
     public required bool CanStop { get; init; }
+    public WorkloadClassification Classification { get; init; } = WorkloadClassification.Unknown;
+    public string ClassificationReason { get; init; } = "Not yet classified.";
+    public string ClassificationLabel => Classification switch
+    {
+        WorkloadClassification.Recommended => "RECOMMENDED",
+        WorkloadClassification.Optional => "OPTIONAL",
+        WorkloadClassification.Protected => "PROTECTED",
+        _ => "UNKNOWN"
+    };
     public bool Selected
     {
         get => _selected;
@@ -280,12 +349,48 @@ public sealed class SystemScanResult
 
 public sealed class AppConfig
 {
+    private Dictionary<string, bool> _applicationSelections = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, bool> _serviceSelections = new(StringComparer.OrdinalIgnoreCase);
+
     public string? SelectedSimulatorId { get; set; }
     public SessionMode SessionMode { get; set; } = SessionMode.Manual;
     public OptimizerOptions Options { get; set; } = new();
     public List<CustomApplicationRule> CustomApplications { get; set; } = [];
-    public Dictionary<string, bool> ApplicationSelections { get; set; } = new(StringComparer.OrdinalIgnoreCase);
-    public Dictionary<string, bool> ServiceSelections { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, bool> ApplicationSelections
+    {
+        get => _applicationSelections;
+        set => _applicationSelections = new(value ?? [], StringComparer.OrdinalIgnoreCase);
+    }
+    public Dictionary<string, bool> ServiceSelections
+    {
+        get => _serviceSelections;
+        set => _serviceSelections = new(value ?? [], StringComparer.OrdinalIgnoreCase);
+    }
+    public string? ActiveSavedProfileName { get; set; }
+    public List<SavedUserProfile> SavedProfiles { get; set; } = [];
+}
+
+public sealed class SavedUserProfile
+{
+    private Dictionary<string, bool> _applicationSelections = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, bool> _serviceSelections = new(StringComparer.OrdinalIgnoreCase);
+
+    public string Name { get; set; } = "";
+    public string? SelectedSimulatorId { get; set; }
+    public SessionMode SessionMode { get; set; } = SessionMode.Manual;
+    public OptimizerOptions Options { get; set; } = new();
+    public List<CustomApplicationRule> CustomApplications { get; set; } = [];
+    public Dictionary<string, bool> ApplicationSelections
+    {
+        get => _applicationSelections;
+        set => _applicationSelections = new(value ?? [], StringComparer.OrdinalIgnoreCase);
+    }
+    public Dictionary<string, bool> ServiceSelections
+    {
+        get => _serviceSelections;
+        set => _serviceSelections = new(value ?? [], StringComparer.OrdinalIgnoreCase);
+    }
+    public DateTimeOffset UpdatedAtUtc { get; set; }
 }
 
 public sealed class CustomApplicationRule
@@ -326,9 +431,39 @@ public sealed class SessionJournal
 {
     public Guid SessionId { get; init; } = Guid.NewGuid();
     public DateTimeOffset StartedAtUtc { get; init; } = DateTimeOffset.UtcNow;
+    public int OwnerProcessId { get; init; }
+    public DateTimeOffset? OwnerProcessStartedAtUtc { get; init; }
     public string SimulatorName { get; init; } = "";
     public bool DryRun { get; init; }
     public List<StateMutation> Mutations { get; init; } = [];
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum RestorationOutcome
+{
+    Restored,
+    LeftClosed,
+    ManualActionRequired,
+    Failed
+}
+
+public sealed record RestorationItemResult(
+    MutationKind Kind,
+    string Target,
+    RestorationOutcome Outcome,
+    string Detail);
+
+public sealed class RestorationReport
+{
+    public Guid SessionId { get; init; }
+    public string SimulatorName { get; init; } = "";
+    public DateTimeOffset CompletedAtUtc { get; init; } = DateTimeOffset.UtcNow;
+    public List<RestorationItemResult> Items { get; init; } = [];
+    public int RestoredCount => Items.Count(item => item.Outcome == RestorationOutcome.Restored);
+    public int LeftClosedCount => Items.Count(item => item.Outcome == RestorationOutcome.LeftClosed);
+    public int ManualActionCount => Items.Count(item => item.Outcome == RestorationOutcome.ManualActionRequired);
+    public int FailedCount => Items.Count(item => item.Outcome == RestorationOutcome.Failed);
+    public bool Succeeded => FailedCount == 0;
 }
 
 public sealed record CommandResult(int ExitCode, string StandardOutput, string StandardError)

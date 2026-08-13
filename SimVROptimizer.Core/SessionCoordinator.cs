@@ -33,8 +33,10 @@ public sealed class SessionCoordinator
     }
 
     public event Action<SessionProgress>? ProgressChanged;
+    public event Action<int?>? SimulatorProcessChanged;
 
     public bool HasRecoveryJournal => _optimizer.HasRecoveryJournal;
+    public RestorationReport? LastRestorationReport => _optimizer.LastRestorationReport;
     public bool IsRunning { get; private set; }
 
     public async Task RunAsync(SimulatorDefinition simulator, OptimizerOptions options, CancellationToken cancellationToken)
@@ -70,6 +72,7 @@ public sealed class SessionCoordinator
             process = await _launcher.LaunchAndWaitAsync(simulator, options, cancellationToken).ConfigureAwait(false);
             if (process is not null)
             {
+                SimulatorProcessChanged?.Invoke(process.Id);
                 await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
             }
         }
@@ -86,6 +89,7 @@ public sealed class SessionCoordinator
             }
             finally
             {
+                SimulatorProcessChanged?.Invoke(null);
                 process?.Dispose();
                 IsRunning = false;
                 _sessionGate.Release();
@@ -93,7 +97,7 @@ public sealed class SessionCoordinator
         }
     }
 
-    public Task RestoreRecoveryAsync(CancellationToken cancellationToken = default) => _optimizer.RestoreAsync(cancellationToken);
+    public Task<RestorationReport> RestoreRecoveryAsync(CancellationToken cancellationToken = default) => _optimizer.RestoreAsync(cancellationToken);
 
     private void ReportProgress(SessionStage stage, string title, string detail) =>
         ProgressChanged?.Invoke(new SessionProgress(stage, title, detail));

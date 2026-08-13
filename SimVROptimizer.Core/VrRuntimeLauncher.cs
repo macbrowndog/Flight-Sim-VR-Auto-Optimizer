@@ -1,8 +1,10 @@
 using System.Diagnostics;
+using Microsoft.Win32;
 
 namespace SimVROptimizer.Core;
 
 public sealed record VrRuntimeSession(VrRuntimePreference Runtime, IReadOnlyList<string> ProcessNames, bool StartedByOptimizer);
+public sealed record VrRuntimeShutdownPolicy(TimeSpan GracefulTimeout, bool AllowForcedTermination, string Method);
 
 public sealed class VrRuntimeLauncher
 {
@@ -51,6 +53,26 @@ public sealed class VrRuntimeLauncher
     private readonly FileLogger _logger;
     public VrRuntimeLauncher(FileLogger logger) => _logger = logger;
     public event Action<string>? StatusChanged;
+
+    public VrRuntimeAvailability CheckAvailability(VrRuntimePreference runtime)
+    {
+        if (runtime == VrRuntimePreference.None)
+            return new(runtime, true, false, "No automatic VR runtime is selected.");
+
+        if (!Definitions.TryGetValue(runtime, out var definition))
+            return new(runtime, false, false, $"Unsupported VR runtime selection: {runtime}.");
+
+        if (IsAnyRunning(definition.ProcessNames))
+            return new(runtime, true, true, $"{definition.DisplayName} is already running and will be left running after the session.");
+
+        if (definition.ExecutableCandidates.Any(File.Exists))
+            return new(runtime, true, false, $"{definition.DisplayName} launcher was found and is ready to start.");
+
+        if (definition.Uri is not null && IsUriProtocolRegistered(definition.Uri))
+            return new(runtime, true, false, $"{definition.DisplayName} is available through its registered launcher.");
+
+        return new(runtime, false, false, $"{definition.DisplayName} was selected but its launcher could not be found. Start it manually or select None.");
+    }
 
     public async Task<VrRuntimeSession?> LaunchAsync(VrRuntimePreference runtime, CancellationToken cancellationToken)
     {
@@ -101,6 +123,12 @@ public sealed class VrRuntimeLauncher
     {
         if (session is null || !session.StartedByOptimizer) return;
 
+        if (session.Runtime == VrRuntimePreference.SteamVR)
+        {
+            await ShutdownSteamVrGracefullyAsync(session, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         var processes = session.ProcessNames.SelectMany(Process.GetProcessesByName).ToArray();
         foreach (var process in processes)
         {
@@ -123,6 +151,93 @@ public sealed class VrRuntimeLauncher
         await ReportAsync($"{session.Runtime} was closed because the optimizer started it.", cancellationToken).ConfigureAwait(false);
     }
 
+    public static VrRuntimeShutdownPolicy GetShutdownPolicy(VrRuntimePreference runtime) =>
+        runtime == VrRuntimePreference.SteamVR
+            ? new(TimeSpan.FromSeconds(30), false, "SteamVR graceful -shutdown command")
+            : new(TimeSpan.FromMilliseconds(750), true, "Close window, then terminate remaining processes");
+
+    private async Task ShutdownSteamVrGracefullyAsync(VrRuntimeSession session, CancellationToken cancellationToken)
+    {
+        var policy = GetShutdownPolicy(VrRuntimePreference.SteamVR);
+        var monitorPath = FindRunningProcessPath("vrmonitor");
+
+        await ReportAsync(
+            "Requesting a graceful SteamVR shutdown so Bluetooth base-station standby can complete.",
+            cancellationToken).ConfigureAwait(false);
+
+        var requestSent = false;
+        if (!string.IsNullOrWhiteSpace(monitorPath))
+        {
+            try
+            {
+                using var command = Process.Start(new ProcessStartInfo(monitorPath)
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    Arguments = "-shutdown"
+                });
+                requestSent = command is not null;
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                await ReportAsync($"SteamVR shutdown command could not be started: {exception.Message}", cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        if (!requestSent)
+        {
+            foreach (var process in Process.GetProcessesByName("vrmonitor"))
+            {
+                using (process)
+                {
+                    try { requestSent |= process.CloseMainWindow(); }
+                    catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+                }
+            }
+        }
+
+        var stopped = await WaitForExitAsync(session.ProcessNames, policy.GracefulTimeout, cancellationToken).ConfigureAwait(false);
+        if (stopped)
+        {
+            await ReportAsync(
+                "SteamVR completed its graceful shutdown; base-station standby was allowed to finish.",
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        await ReportAsync(
+            $"SteamVR did not finish shutting down within {policy.GracefulTimeout.TotalSeconds:0} seconds. It was left running instead of being force-closed, so base-station power management can continue.",
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<bool> WaitForExitAsync(
+        IReadOnlyList<string> processNames,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (IsAnyRunning(processNames) && DateTime.UtcNow < deadline)
+            await Task.Delay(500, cancellationToken).ConfigureAwait(false);
+        return !IsAnyRunning(processNames);
+    }
+
+    private static string? FindRunningProcessPath(string processName)
+    {
+        foreach (var process in Process.GetProcessesByName(processName))
+        {
+            using (process)
+            {
+                try
+                {
+                    var path = process.MainModule?.FileName;
+                    if (!string.IsNullOrWhiteSpace(path) && File.Exists(path)) return path;
+                }
+                catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException) { }
+            }
+        }
+        return null;
+    }
+
     private static bool IsAnyRunning(IEnumerable<string> processNames)
     {
         foreach (var processName in processNames)
@@ -132,6 +247,22 @@ public sealed class VrRuntimeLauncher
             finally { foreach (var process in processes) process.Dispose(); }
         }
         return false;
+    }
+
+    private static bool IsUriProtocolRegistered(string uri)
+    {
+        var separator = uri.IndexOf(':');
+        if (separator <= 0) return false;
+        var scheme = uri[..separator];
+        try
+        {
+            using var key = Registry.ClassesRoot.OpenSubKey(scheme);
+            return key is not null;
+        }
+        catch (Exception exception) when (exception is System.Security.SecurityException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private async Task ReportAsync(string message, CancellationToken cancellationToken)

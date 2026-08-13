@@ -6,7 +6,7 @@
     <RootNamespace>SimVROptimizer.App</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
-    <Version>1.9.0</Version>
+    <Version>1.10.0</Version>
     <Product>VR Auto-Optimizer</Product>
     <Description>Transactional flight simulator session optimizer for Windows.</Description>
   </PropertyGroup>
@@ -15,5 +15,8 @@
   </ItemGroup>
   <ItemGroup>
     <Resource Include="Assets\AppIcon.ico" />
+    <Content Include="Tools\PresentMon-2.5.1-x64.exe" CopyToOutputDirectory="PreserveNewest" Link="Tools\PresentMon-2.5.1-x64.exe" />
+    <Content Include="..\MSFS\Package\flightdecktools-vr-dashboard\**\*" CopyToOutputDirectory="PreserveNewest" Link="MSFS\flightdecktools-vr-dashboard\%(RecursiveDir)%(Filename)%(Extension)" />
+    <Content Include="..\THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" Link="THIRD-PARTY-NOTICES.md" />
   </ItemGroup>
 </Project>

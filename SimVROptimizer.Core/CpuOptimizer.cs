@@ -78,50 +78,33 @@ public sealed class CpuOptimizer
         }
 
         var cpuSetsChanged = false;
-        string strategy;
-        if (profile.IsAmd && profile.IsX3D)
+        var plan = CpuTopologyPlanner.Create(profile, options.UseVendorAwareCpuSets);
+        var strategy = plan.Description;
+        if (plan.Strategy == CpuSchedulingStrategy.IntelPerformanceCpuSets && originalCpuSets.Count > 0)
         {
-            strategy = "AMD X3D detected; Windows scheduler retained (cache/CCD safe)";
+            strategy += $"; existing {originalCpuSets.Count}-CPU Set policy preserved";
         }
-        else if (profile.IsAmd)
+        else if (plan.Strategy == CpuSchedulingStrategy.IntelPerformanceCpuSets)
         {
-            strategy = "AMD detected; Windows scheduler retained";
-        }
-        else if (profile.IsIntel && profile.IsHybrid && options.UseVendorAwareCpuSets)
-        {
-            var highestClass = profile.CpuSets.Max(item => item.EfficiencyClass);
-            var performanceCpuSetIds = profile.CpuSets
-                .Where(item => item.EfficiencyClass == highestClass)
-                .Select(item => item.Id)
-                .ToArray();
-            if (performanceCpuSetIds.Length > 0)
+            var requested = plan.CpuSetIds.ToArray();
+            if (SetProcessDefaultCpuSets(process.Handle, requested, (uint)requested.Length))
             {
-                if (SetProcessDefaultCpuSets(process.Handle, performanceCpuSetIds, (uint)performanceCpuSetIds.Length))
+                var applied = ReadProcessCpuSets(process.Handle).Order().ToArray();
+                if (requested.SequenceEqual(applied))
                 {
                     cpuSetsChanged = true;
-                    strategy = $"Intel hybrid detected; {performanceCpuSetIds.Length} performance-class CPU set(s) applied";
+                    strategy += "; assignment applied and verified";
                 }
                 else
                 {
-                    strategy = $"Intel hybrid detected; CPU set request failed ({new Win32Exception(Marshal.GetLastWin32Error()).Message}), scheduler retained";
+                    _ = SetProcessDefaultCpuSets(process.Handle, null, 0);
+                    strategy += "; Windows did not verify the full assignment, so it was cleared";
                 }
             }
             else
             {
-                strategy = "Intel hybrid detected; no performance CPU sets were available, scheduler retained";
+                strategy += $"; request failed ({new Win32Exception(Marshal.GetLastWin32Error()).Message}), scheduler retained";
             }
-        }
-        else if (profile.IsIntel && profile.IsHybrid)
-        {
-            strategy = "Intel hybrid detected; Windows scheduler retained (advanced CPU sets not selected)";
-        }
-        else if (profile.IsIntel)
-        {
-            strategy = "Intel non-hybrid detected; Windows scheduler retained";
-        }
-        else
-        {
-            strategy = "Unknown CPU vendor; Windows scheduler retained";
         }
 
         var powerThrottlingChanged = false;
@@ -138,7 +121,7 @@ public sealed class CpuOptimizer
         }
 
         var summary = $"CPU Vendor={profile.Vendor}; Model={profile.Model}; Cores={profile.PhysicalCoreCount}; " +
-                      $"Logical={profile.LogicalProcessorCount}; Priority={requestedPriority}; Strategy={strategy}.";
+                      $"Logical={profile.LogicalProcessorCount}; Groups={plan.ProcessorGroupCount}; Priority={requestedPriority}; Strategy={strategy}.";
         return new CpuOptimizationScope(originalPriority, originalCpuSets, originalPowerThrottling, priorityChanged, cpuSetsChanged, powerThrottlingChanged, summary);
     }
 
@@ -195,7 +178,16 @@ public sealed class CpuOptimizer
                     var coreIndex = Marshal.ReadByte(current, 15);
                     var efficiencyClass = Marshal.ReadByte(current, 18);
                     var flags = Marshal.ReadByte(current, 19);
-                    result.Add(new CpuSetDescriptor(id, group, logicalIndex, coreIndex, efficiencyClass, (flags & 0x01) != 0));
+                    result.Add(new CpuSetDescriptor(
+                        id,
+                        group,
+                        logicalIndex,
+                        coreIndex,
+                        efficiencyClass,
+                        (flags & 0x01) != 0,
+                        (flags & 0x02) != 0,
+                        (flags & 0x04) != 0,
+                        (flags & 0x08) != 0));
                 }
                 offset += size;
             }
