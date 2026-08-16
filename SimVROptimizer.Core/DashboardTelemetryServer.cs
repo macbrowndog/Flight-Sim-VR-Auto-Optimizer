@@ -15,6 +15,7 @@ public sealed record DashboardTelemetryFrame(
     string Simulator,
     int StutterCount,
     int CpuSpikeCount,
+    bool OpenXrTurboMode,
     PerformanceTelemetrySample? Sample,
     string CpuName,
     IReadOnlyList<ProcessorLoadGroup> ProcessorGroups);
@@ -39,7 +40,7 @@ public sealed class DashboardTelemetryServer : IAsyncDisposable
     private Task? _acceptLoop;
     private long _nextClientId;
     private DashboardTelemetryFrame _snapshot = new(
-        4, DateTimeOffset.UtcNow, false, "Optimizer ready", "", 0, 0, null, "", []);
+        5, DateTimeOffset.UtcNow, false, "Optimizer ready", "", 0, 0, false, null, "", []);
 
     public DashboardTelemetryServer(FileLogger logger, int port = DefaultPort, CpuProfile? cpuProfile = null)
     {
@@ -71,12 +72,13 @@ public sealed class DashboardTelemetryServer : IAsyncDisposable
         return _logger.WriteAsync($"VR toolbar telemetry bridge listening on {Endpoint} (read-only, loopback only).", cancellationToken);
     }
 
-    public void BeginSession(string simulator)
+    public void BeginSession(string simulator, bool openXrTurboMode)
     {
         lock (_snapshotGate)
         {
             _snapshot = new DashboardTelemetryFrame(
-                4, DateTimeOffset.UtcNow, true, "Waiting for the first performance sample", simulator, 0, 0, null,
+                5, DateTimeOffset.UtcNow, true, "Waiting for the first performance sample", simulator, 0, 0,
+                openXrTurboMode, null,
                 _cpuProfile?.Model ?? "", []);
         }
         BroadcastSnapshot();

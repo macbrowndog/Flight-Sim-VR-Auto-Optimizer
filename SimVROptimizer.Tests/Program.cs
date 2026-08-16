@@ -1,5 +1,6 @@
 using System.Net.Sockets;
 using System.Net.WebSockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using SimVROptimizer.Core;
@@ -7,6 +8,8 @@ using SimVROptimizer.Core;
 var tests = new (string Name, Func<Task> Run)[]
 {
     ("Power plan parser", TestPowerPlanParserAsync),
+    ("AMD X3D Balanced power policy", TestAmdX3dBalancedPowerPlanAsync),
+    ("AMD X3D Xbox Game Bar protection", TestAmdX3dGameBarProtectionAsync),
     ("Service state parser", TestServiceParserAsync),
     ("NVIDIA state parser", TestNvidiaParserAsync),
     ("Running service parser", TestRunningServiceParserAsync),
@@ -29,7 +32,9 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Ten simulator configurations", TestSimulatorCatalogAsync),
     ("IL-2 Korea standalone launcher resolution", TestIl2KoreaLauncherResolutionAsync),
     ("MSFS 2024 FastLaunch plans", TestMsfs2024FastLaunchAsync),
+    ("Bundled OpenXR Turbo layer", TestOpenXrTurboLayerAsync),
     ("VR runtime shutdown policy", TestVrRuntimeShutdownPolicyAsync),
+    ("Xbox post-flight cleanup", TestXboxSessionCleanupAsync),
     ("Performance telemetry calculations", TestPerformanceTelemetryAsync),
     ("Performance monitor sampling", TestPerformanceMonitorSamplingAsync),
     ("VR toolbar telemetry bridge", TestToolbarTelemetryBridgeAsync),
@@ -42,6 +47,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Transactional restore", TestTransactionalRestoreAsync),
     ("Failed restore verification retains journal", TestRestoreVerificationFailureAsync),
     ("Applications remain closed after restore", TestApplicationLeftClosedAsync),
+    ("OneDrive is restored after flight", TestOneDriveRestoredAsync),
     ("Corrupt recovery journal is retained", TestCorruptJournalAsync)
 };
 
@@ -175,9 +181,10 @@ static Task TestCriticalRuntimeProtectionAsync()
 {
     var method = typeof(SystemScanner).GetMethod("IsProtectedApplication", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
         ?? throw new InvalidOperationException("Protection rule method was not found.");
-    foreach (var processName in new[] { "GamingServices", "GameInput", "TextInputHost", "nvcontainer", "vrss_gaze_provider", "TobiiPlatformRuntime", "Navigraph", "Navigraph Simlink", "MOZA Cockpit", "SimRacingStudio", "pia-service", "MSFS_AutoFPS", "MSFS2024_AutoFPS_by_kayJay" })
+    foreach (var processName in new[] { "GamingServices", "GameInput", "TextInputHost", "nvcontainer", "vrss_gaze_provider", "TobiiPlatformRuntime", "Navigraph", "Navigraph Simlink", "MOZA Cockpit", "SimRacingStudio", "pi_server", "pi_vst", "pi_overlay", "PiPlayService", "PiPlatformService_64", "MSFS_AutoFPS", "MSFS2024_AutoFPS_by_kayJay" })
         True((bool)(method.Invoke(null, [processName]) ?? false));
     True(!(bool)(method.Invoke(null, ["CCleaner64"]) ?? true));
+    True(!(bool)(method.Invoke(null, ["pia-service"]) ?? true));
     return Task.CompletedTask;
 }
 
@@ -233,16 +240,23 @@ static Task TestAutomaticSelectionPolicyAsync()
     var lowImpact = new RunningAppCandidate { ProcessName = "LowImpact", DisplayName = "LowImpact", Impact = ImpactLevel.Low, Reason = "test", InstanceCount = 1, MemoryMb = 1, RestartCommand = "exe:C:\\low.exe", CanStop = true, Classification = WorkloadClassification.Optional };
     var manualRestart = new RunningAppCandidate { ProcessName = "Manual", DisplayName = "Manual", Impact = ImpactLevel.Low, Reason = "test", InstanceCount = 1, MemoryMb = 1, RestartCommand = "none:", CanStop = true, Classification = WorkloadClassification.Recommended };
     var protectedApp = new RunningAppCandidate { ProcessName = "Protected", DisplayName = "Protected", Impact = ImpactLevel.Low, Reason = "test", InstanceCount = 1, MemoryMb = 1, RestartCommand = "exe:C:\\protected.exe", CanStop = false, Classification = WorkloadClassification.Protected };
+    var requiredLasso = new RunningAppCandidate { ProcessName = "ProcessGovernor", DisplayName = "Process Lasso Core Engine", Impact = ImpactLevel.High, Reason = "test", InstanceCount = 1, MemoryMb = 1, RestartCommand = "exe:C:\\ProcessGovernor.exe", CanStop = true, SelectionRequired = true, Classification = WorkloadClassification.Recommended };
     var stoppableService = new ServiceCandidate { ServiceName = "Stoppable", DisplayName = "Stoppable", Impact = ImpactLevel.Medium, Reason = "test", CanStop = true };
     var protectedService = new ServiceCandidate { ServiceName = "Protected", DisplayName = "Protected", Impact = ImpactLevel.Low, Reason = "test", CanStop = false };
 
-    SessionSelectionPolicy.SelectAutomatic([restartable, lowImpact, manualRestart, protectedApp], [stoppableService, protectedService]);
+    SessionSelectionPolicy.SelectAutomatic([restartable, lowImpact, manualRestart, protectedApp, requiredLasso], [stoppableService, protectedService]);
     True(restartable.Selected);
     True(!lowImpact.Selected);
     True(!manualRestart.Selected);
     True(!protectedApp.Selected);
+    True(requiredLasso.Selected);
     True(!stoppableService.Selected);
     True(!protectedService.Selected);
+
+    SessionSelectionPolicy.Clear([requiredLasso], []);
+    True(requiredLasso.Selected);
+    SessionSelectionPolicy.ApplySaved([requiredLasso], [], new Dictionary<string, bool> { ["ProcessGovernor"] = false }, new Dictionary<string, bool>(), OptimizationProfile.Standard, false);
+    True(requiredLasso.Selected);
 
     SessionSelectionPolicy.SelectAutomatic([lowImpact], [], profile: OptimizationProfile.Aggressive);
     True(!lowImpact.Selected);
@@ -254,6 +268,55 @@ static Task TestAutomaticSelectionPolicyAsync()
     True(!obs.Selected);
     True(stoppableService.Selected);
     True(!streamDeckService.Selected);
+    return Task.CompletedTask;
+}
+
+static async Task TestAmdX3dBalancedPowerPlanAsync()
+{
+    const string originalPlan = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const string balancedPlan = "381b4222-f694-41f0-9685-ff5bb260df2e";
+    var profile = new CpuProfile("AuthenticAMD", "AMD Ryzen 9 9950X3D", false, true, true, false, 16, 32, []);
+    var fixture = CreateFixture(cpuProfileProvider: new FakeCpuProfileProvider(profile));
+    var activePlan = originalPlan;
+    fixture.Commands.Handler = (file, args) =>
+    {
+        if (file == "powercfg.exe" && args.FirstOrDefault() == "/getactivescheme")
+            return Ok("Power Scheme GUID: " + activePlan);
+        if (file == "powercfg.exe" && args.FirstOrDefault() == "/setactive")
+            activePlan = args[1];
+        return Ok();
+    };
+
+    await fixture.Optimizer.BeginAsync("Test Sim", new OptimizerOptions
+    {
+        UseUltimatePowerPlan = true,
+        DisableGameDvr = true,
+        EnableNvidiaPersistence = false,
+        FlushDnsCache = false
+    }, [], [], CancellationToken.None);
+
+    var journal = await JsonStore.LoadRequiredAsync<SessionJournal>(fixture.Paths.JournalFile);
+    Equal(1, journal.Mutations.Count);
+    Equal(MutationKind.PowerPlan, journal.Mutations.Single().Kind);
+    Equal(originalPlan, journal.Mutations.Single().OriginalValue);
+    Equal(balancedPlan, journal.Mutations.Single().AppliedValue);
+    True(!journal.Mutations.Any(mutation => mutation.Kind == MutationKind.RegistryValue));
+    True(fixture.Commands.Calls.Any(call => call.File == "powercfg.exe" && string.Join(" ", call.Args) == "/setactive " + balancedPlan));
+    True(!fixture.Commands.Calls.Any(call => call.File == "powercfg.exe" && call.Args.FirstOrDefault() == "/duplicatescheme"));
+
+    await fixture.Optimizer.RestoreAsync();
+    True(fixture.Commands.Calls.Any(call => call.File == "powercfg.exe" && string.Join(" ", call.Args) == "/setactive " + originalPlan));
+    Equal(originalPlan, activePlan);
+}
+
+static Task TestAmdX3dGameBarProtectionAsync()
+{
+    var x3d = new CpuProfile("AuthenticAMD", "AMD Ryzen 9 9950X3D", false, true, true, false, 16, 32, []);
+    var amd = new CpuProfile("AuthenticAMD", "AMD Ryzen 9 9950X", false, true, false, false, 16, 32, []);
+    True(CpuProtectionPolicy.IsXboxGameBarProtected(x3d, "XboxGameBar"));
+    True(CpuProtectionPolicy.IsXboxGameBarProtected(x3d, "GameBar"));
+    True(!CpuProtectionPolicy.IsXboxGameBarProtected(amd, "XboxGameBar"));
+    True(!CpuProtectionPolicy.IsXboxGameBarProtected(x3d, "XboxPcApp"));
     return Task.CompletedTask;
 }
 
@@ -338,12 +401,16 @@ static Task TestApplicationClassificationAsync()
     var unknown = ApplicationClassifier.Classify("UncataloguedTool", false, true, false, @"exe:C:\Tools\Unknown.exe");
     var protectedApp = ApplicationClassifier.Classify("MSFS_AutoFPS", true, false, false, @"exe:C:\Tools\MSFS_AutoFPS.exe");
     var custom = ApplicationClassifier.Classify("MyCustomTool", false, true, true, @"exe:C:\Tools\Custom.exe");
+    var processLasso = ApplicationClassifier.Classify("ProcessGovernor", true, true, false, @"exe:C:\Program Files\Process Lasso\ProcessGovernor.exe");
+    var pia = ApplicationClassifier.Classify("pia-service", true, true, false, @"exe:C:\Program Files\Private Internet Access\pia-service.exe");
 
     Equal(WorkloadClassification.Recommended, recommended.Classification);
     Equal(WorkloadClassification.Optional, optional.Classification);
     Equal(WorkloadClassification.Unknown, unknown.Classification);
     Equal(WorkloadClassification.Protected, protectedApp.Classification);
     Equal(WorkloadClassification.Optional, custom.Classification);
+    Equal(WorkloadClassification.Recommended, processLasso.Classification);
+    Equal(WorkloadClassification.Optional, pia.Classification);
     return Task.CompletedTask;
 }
 
@@ -376,7 +443,6 @@ static Task TestOptimizationProfilesAsync()
     True(options.UseHighResolutionTimer);
     True(options.DisableFullscreenOptimizations);
     True(options.DisablePowerThrottling);
-    True(options.ApplyNetworkMemoryOptimizations);
 
     OptimizationProfiles.Apply(options, OptimizationProfile.Standard);
     Equal(ProcessPriorityPreference.High, options.ProcessPriority);
@@ -389,7 +455,6 @@ static Task TestOptimizationProfilesAsync()
     True(!options.UseHighResolutionTimer);
     True(!options.DisableFullscreenOptimizations);
     True(!options.DisablePowerThrottling);
-    True(!options.ApplyNetworkMemoryOptimizations);
     return Task.CompletedTask;
 }
 
@@ -408,6 +473,46 @@ static async Task TestCustomApplicationRuleAsync()
     True(candidate.IsCustom);
     Equal("Automatic", candidate.RestartSupport);
     Equal(WorkloadClassification.Optional, candidate.Classification);
+}
+
+static Task TestOpenXrTurboLayerAsync()
+{
+    Equal(@"SOFTWARE\Khronos\OpenXR\1\ApiLayers\Implicit", OpenXrTurboLayer.RegistryPath);
+    Equal("VR_Optimizer_Turbo_Layer.json", OpenXrTurboLayer.ManifestFileName);
+    Equal("VR_Optimizer_Turbo_Layer.dll", OpenXrTurboLayer.LibraryFileName);
+    True(OpenXrTurboLayer.IsPackageAvailable);
+
+    var module = NativeLibrary.Load(OpenXrTurboLayer.LibraryPath);
+    try
+    {
+        var export = NativeLibrary.GetExport(module, "xrNegotiateLoaderApiLayerInterface");
+        var negotiate = Marshal.GetDelegateForFunctionPointer<OpenXrNegotiateDelegate>(export);
+        var loader = new OpenXrLoaderInfo
+        {
+            StructType = 1,
+            StructVersion = 1,
+            StructSize = (nuint)Marshal.SizeOf<OpenXrLoaderInfo>(),
+            MinInterfaceVersion = 1,
+            MaxInterfaceVersion = 1,
+            MinApiVersion = 0x0001000000000000,
+            MaxApiVersion = 0x0001000100000000
+        };
+        var request = new OpenXrLayerRequest
+        {
+            StructType = 2,
+            StructVersion = 1,
+            StructSize = (nuint)Marshal.SizeOf<OpenXrLayerRequest>()
+        };
+        Equal(0, negotiate(ref loader, IntPtr.Zero, ref request));
+        Equal((uint)1, request.LayerInterfaceVersion);
+        True(request.GetInstanceProcAddr != IntPtr.Zero);
+        True(request.CreateApiLayerInstance != IntPtr.Zero);
+    }
+    finally
+    {
+        NativeLibrary.Free(module);
+    }
+    return Task.CompletedTask;
 }
 
 static Task TestSimulatorCatalogAsync()
@@ -523,6 +628,7 @@ static async Task TestNamedUserProfilesAsync()
             Profile = OptimizationProfile.Aggressive,
             VrRuntime = VrRuntimePreference.PimaxPlay,
             UseVendorAwareCpuSets = true,
+            UseOpenXrTurboMode = true,
             LaunchTimeoutSeconds = 240
         },
         CustomApplications = [new CustomApplicationRule { ProcessName = "ExampleTool", RestartExecutablePath = @"C:\Tools\ExampleTool.exe" }],
@@ -545,6 +651,7 @@ static async Task TestNamedUserProfilesAsync()
     Equal(SessionMode.Automatic, config.SessionMode);
     Equal(OptimizationProfile.Aggressive, config.Options.Profile);
     Equal(VrRuntimePreference.PimaxPlay, config.Options.VrRuntime);
+    True(config.Options.UseOpenXrTurboMode);
     Equal(true, config.ServiceSelections["sysmain"]);
 
     config.Options.LaunchTimeoutSeconds = 300;
@@ -728,6 +835,35 @@ static async Task TestLogRotationAsync()
     True(File.Exists(path + ".2"));
 }
 
+static async Task TestXboxSessionCleanupAsync()
+{
+    var running = true;
+    var commands = new FakeCommandRunner
+    {
+        Handler = (file, args) =>
+        {
+            if (file != "sc.exe") return Ok();
+            if (args.FirstOrDefault() == "query") return running ? Ok("STATE : 4 RUNNING") : Ok("STATE : 1 STOPPED");
+            if (args.FirstOrDefault() == "stop") { running = false; return Ok(); }
+            return Ok();
+        }
+    };
+    var directory = Path.Combine(AppContext.BaseDirectory, "test-data", Guid.NewGuid().ToString("N"));
+    var messages = new List<string>();
+    var cleanup = new XboxSessionCleanup(
+        commands,
+        new FileLogger(Path.Combine(directory, "xbox-cleanup.log")),
+        applicationNames: [],
+        serviceNames: ["GamingServices"]);
+    cleanup.StatusChanged += messages.Add;
+
+    await cleanup.CleanupAsync();
+
+    True(commands.Calls.Any(call => call.File == "sc.exe" && string.Join(" ", call.Args) == "stop GamingServices"));
+    True(messages.Any(message => message.Contains("Stopped Xbox service GamingServices", StringComparison.Ordinal)));
+    True(messages.Any(message => message.Contains("startup settings were not changed", StringComparison.Ordinal)));
+}
+
 static async Task TestPendingLaunchRoundtripAsync()
 {
     var directory = Path.Combine(AppContext.BaseDirectory, "test-data", Guid.NewGuid().ToString("N"));
@@ -873,6 +1009,31 @@ static async Task TestApplicationLeftClosedAsync()
     True(!File.Exists(fixture.Paths.JournalFile));
 }
 
+static async Task TestOneDriveRestoredAsync()
+{
+    var restarter = new FakeApplicationRestarter { Result = true };
+    var fixture = CreateFixture(restarter);
+    var journal = new SessionJournal
+    {
+        SimulatorName = "Test Sim",
+        Mutations =
+        [
+            new StateMutation(MutationKind.Process, "OneDrive", @"exe:C:\Users\Test\OneDrive.exe", "stopped", DateTimeOffset.UtcNow)
+        ]
+    };
+    await JsonStore.SaveAtomicAsync(fixture.Paths.JournalFile, journal);
+
+    var report = await fixture.Optimizer.RestoreAsync();
+
+    True(report.Succeeded);
+    Equal(1, report.RestoredCount);
+    Equal(0, report.LeftClosedCount);
+    Equal(RestorationOutcome.Restored, report.Items.Single().Outcome);
+    Equal("OneDrive", restarter.ProcessName);
+    Equal(@"exe:C:\Users\Test\OneDrive.exe", restarter.RestartCommand);
+    True(!File.Exists(fixture.Paths.JournalFile));
+}
+
 static async Task TestCorruptJournalAsync()
 {
     var fixture = CreateFixture();
@@ -897,10 +1058,12 @@ static async Task TestToolbarTelemetryBridgeAsync()
     await socket.ConnectAsync(new Uri(server.Endpoint), CancellationToken.None);
     var initial = await ReceiveToolbarFrameAsync(socket);
     True(!initial.SessionActive);
+    True(!initial.OpenXrTurboMode);
 
-    server.BeginSession("Microsoft Flight Simulator 2024");
+    server.BeginSession("Microsoft Flight Simulator 2024", openXrTurboMode: true);
     var started = await ReceiveToolbarFrameAsync(socket);
     True(started.SessionActive);
+    True(started.OpenXrTurboMode);
     Equal("Microsoft Flight Simulator 2024", started.Simulator);
 
     var sample = new PerformanceTelemetrySample(
@@ -913,7 +1076,8 @@ static async Task TestToolbarTelemetryBridgeAsync()
     Equal(1, published.CpuSpikeCount);
     Equal(4, published.Sample.LogicalProcessorUsage.Count);
     Equal(67.8, published.Sample.MainThreadFrameTimeMs);
-    Equal(4, published.SchemaVersion);
+    Equal(5, published.SchemaVersion);
+    True(published.OpenXrTurboMode);
     Equal("", published.CpuName);
     Equal("ALL LOGICAL", published.ProcessorGroups.Single().Label);
 
@@ -975,13 +1139,16 @@ static async Task TestToolbarPackageInstallerAsync()
     True(!Directory.Exists(installed.TargetDirectory));
 }
 
-static (TransactionalOptimizer Optimizer, FakeCommandRunner Commands, AppPaths Paths) CreateFixture()
+static (TransactionalOptimizer Optimizer, FakeCommandRunner Commands, AppPaths Paths) CreateFixture(
+    IApplicationRestarter? applicationRestarter = null,
+    ICpuProfileProvider? cpuProfileProvider = null)
 {
     var directory = Path.Combine(AppContext.BaseDirectory, "test-data", Guid.NewGuid().ToString("N"));
     var paths = new AppPaths(directory);
     paths.EnsureCreated();
     var commands = new FakeCommandRunner();
-    return (new TransactionalOptimizer(commands, paths, new FileLogger(paths.LogFile)), commands, paths);
+    cpuProfileProvider ??= new FakeCpuProfileProvider(new CpuProfile("GenuineIntel", "Test CPU", true, false, false, false, 8, 16, []));
+    return (new TransactionalOptimizer(commands, paths, new FileLogger(paths.LogFile), applicationRestarter, cpuProfileProvider), commands, paths);
 }
 
 static CommandResult Ok(string output = "") => new(0, output, "");
@@ -1005,4 +1172,53 @@ internal sealed class FakeCommandRunner : ICommandRunner
         Calls.Add((fileName, args));
         return Task.FromResult(Handler(fileName, args));
     }
+}
+
+internal sealed class FakeApplicationRestarter : IApplicationRestarter
+{
+    public bool Result { get; set; }
+    public bool Running { get; set; }
+    public string? ProcessName { get; private set; }
+    public string? RestartCommand { get; private set; }
+
+    public bool IsRunning(string processName) => Running;
+
+    public Task<bool> RestartAndVerifyAsync(string processName, string restartCommand, CancellationToken cancellationToken)
+    {
+        ProcessName = processName;
+        RestartCommand = restartCommand;
+        return Task.FromResult(Result);
+    }
+}
+
+internal sealed class FakeCpuProfileProvider(CpuProfile profile) : ICpuProfileProvider
+{
+    public CpuProfile GetProfile() => profile;
+}
+
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
+internal delegate int OpenXrNegotiateDelegate(ref OpenXrLoaderInfo loaderInfo, IntPtr layerName, ref OpenXrLayerRequest request);
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct OpenXrLoaderInfo
+{
+    public int StructType;
+    public uint StructVersion;
+    public nuint StructSize;
+    public uint MinInterfaceVersion;
+    public uint MaxInterfaceVersion;
+    public ulong MinApiVersion;
+    public ulong MaxApiVersion;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct OpenXrLayerRequest
+{
+    public int StructType;
+    public uint StructVersion;
+    public nuint StructSize;
+    public uint LayerInterfaceVersion;
+    public ulong LayerApiVersion;
+    public IntPtr GetInstanceProcAddr;
+    public IntPtr CreateApiLayerInstance;
 }

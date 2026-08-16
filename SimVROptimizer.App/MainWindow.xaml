@@ -17,7 +17,11 @@
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <StackPanel>
                     <TextBlock Text="FLIGHT DECK / VR AUTO-OPTIMIZER" FontFamily="Consolas" FontSize="23" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" />
-                    <TextBlock Text="SESSION CONTROL • PERFORMANCE MANAGEMENT • AUTOMATIC RECOVERY" FontFamily="Consolas" FontSize="11" Foreground="{StaticResource MutedTextBrush}" Margin="0,4,0,0" />
+                    <Grid Margin="0,4,0,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <TextBlock Text="SESSION CONTROL • PERFORMANCE MANAGEMENT • AUTOMATIC RECOVERY" FontFamily="Consolas" FontSize="11" Foreground="{StaticResource MutedTextBrush}" />
+                        <TextBlock x:Name="HeaderVersionLabel" Grid.Column="2" Text="ANDREW BROWN © 2026 • VERSION" FontFamily="Consolas" FontSize="10" Foreground="{StaticResource CyanBrush}" Margin="18,0,0,0" />
+                    </Grid>
                 </StackPanel>
                 <Border Grid.Column="1" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Background="#0A1012" Padding="14,8" Margin="10,0">
                     <StackPanel Orientation="Horizontal">
@@ -65,7 +69,7 @@
                     <DataGrid x:Name="AppsGrid" Grid.Row="1" AutoGenerateColumns="False" Background="#0C1214" Foreground="{StaticResource TextBrush}"
                               RowBackground="#0C1214" AlternatingRowBackground="#111A1D" GridLinesVisibility="Horizontal" BorderThickness="0">
                         <DataGrid.Columns>
-                            <DataGridTemplateColumn Header="CUT" Width="55"><DataGridTemplateColumn.CellTemplate><DataTemplate><CheckBox IsChecked="{Binding Selected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding CanStop}" Click="CandidateSelection_Click" HorizontalAlignment="Center" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="CUT" Width="55"><DataGridTemplateColumn.CellTemplate><DataTemplate><CheckBox IsChecked="{Binding Selected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding CanChangeSelection}" Click="CandidateSelection_Click" HorizontalAlignment="Center" ToolTip="Process Lasso power controllers are locked selected on AMD X3D so Windows Balanced can remain active." /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
                             <DataGridTextColumn Header="APPLICATION" Binding="{Binding DisplayName}" Width="1.4*" IsReadOnly="True" />
                             <DataGridTemplateColumn Header="GUIDANCE" Width="112" IsReadOnly="True">
                                 <DataGridTemplateColumn.CellTemplate>
@@ -140,13 +144,18 @@
                             <TextBlock Text="PERFORMANCE PANEL" Style="{StaticResource InstrumentLabel}" Margin="0,0,0,9"/>
                             <TextBlock Text="OPTIMIZATION PROFILE" Style="{StaticResource InstrumentLabel}" Margin="0,3,0,6" />
                             <ComboBox x:Name="ProfileCombo" Height="34" SelectionChanged="ProfileCombo_SelectionChanged" />
-                            <CheckBox x:Name="PowerPlanCheck" Content="ULTIMATE PERFORMANCE / temporary" IsChecked="True" />
+                            <CheckBox x:Name="PowerPlanCheck" Content="POWER PLAN / CPU-aware temporary" IsChecked="True"
+                                      ToolTip="Uses Windows Balanced on AMD X3D processors for cache-aware CCD scheduling. Other supported processors use a temporary Ultimate Performance plan. The original plan is restored after the flight." />
                             <TextBlock Text="PROCESS PRIORITY" Style="{StaticResource InstrumentLabel}" Margin="0,11,0,6" />
                             <ComboBox x:Name="PriorityCombo" Height="34" />
                             <CheckBox x:Name="CpuSetsCheck" Content="CPU TOPOLOGY / Intel performance-core CPU Sets"
                                       ToolTip="Uses Windows processor-group-aware CPU Sets on Intel hybrid CPUs only. AMD X3D and existing simulator CPU policies remain scheduler-managed." />
                             <CheckBox x:Name="NvidiaCheck" Content="NVIDIA / temporary persistence" />
                             <CheckBox x:Name="FastLaunchCheck" Content="MSFS 2024 / skip logos + intro (-FastLaunch)" ToolTip="Applies only to Microsoft Flight Simulator 2024 Store and Steam launches." />
+                            <CheckBox x:Name="OpenXrTurboCheck" Content="OPENXR / Turbo frame pacing"
+                                      ToolTip="Uses the VR Optimizer's bundled OpenXR layer; OpenXR Toolkit is not required. Temporarily pipelines one frame and removes the layer registration after the session. May conflict with motion reprojection or some runtimes." />
+                            <CheckBox x:Name="DashboardEnabledCheck" Content="DASHBOARD SIMCONNECT INFO / monitor session" IsChecked="True"
+                                      ToolTip="Turns the desktop and MSFS VR dashboard telemetry feed on or off. When enabled, SimConnect supplies MSFS FPS and frame timing while CPU, MainThread and memory readings are monitored locally." />
                             <CheckBox x:Name="ContentCreatorCheck" Content="CREATOR MODE / keep capture tools online"
                                       Checked="ContentCreatorCheck_Changed" Unchecked="ContentCreatorCheck_Changed"
                                       ToolTip="Protects OBS, Streamlabs, Twitch Studio, Stream Deck, NVIDIA Broadcast, Voicemeeter, Elgato, XSplit, vMix and related helper services in Automatic mode." />
@@ -193,7 +202,7 @@
                             <StackPanel>
                                 <TextBlock Text="STANDARD / SAFE" Style="{StaticResource InstrumentLabel}" Margin="0,0,0,9"/>
                                 <CheckBox x:Name="FlushDnsCheck" Content="DNS FLUSH / one-time cache clear" />
-                                <TextBlock Text="Ultimate Performance, high process priority, vendor-aware CPU sets and NVIDIA persistence are configured on the Flight Profile panel." Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,10,0,0"/>
+                                <TextBlock Text="CPU-aware power handling, high process priority, vendor-aware CPU sets and NVIDIA persistence are configured on the Flight Profile panel." Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,10,0,0"/>
                                 <Border Background="#081012" BorderBrush="#2E4448" BorderThickness="1" Padding="10" Margin="0,16,0,0">
                                     <TextBlock Text="Service stopping is intentionally excluded from Standard mode. SysMain, Print Spooler, iCloud, Google updater and other approved service candidates are available only under Aggressive." Foreground="{StaticResource CyanBrush}" TextWrapping="Wrap" FontFamily="Consolas"/>
                                 </Border>
@@ -207,7 +216,6 @@
                                 <CheckBox x:Name="TimerResolutionCheck" Content="TIMER RESOLUTION / request 0.5 ms" />
                                 <CheckBox x:Name="FullscreenOptimizationsCheck" Content="FULLSCREEN OPTIMIZATIONS / disable temporarily" />
                                 <CheckBox x:Name="PowerThrottlingCheck" Content="POWER THROTTLING / disable for simulator" />
-                                <CheckBox x:Name="NetworkMemoryCheck" Content="NETWORK + MULTIMEDIA / session tuning" />
                                 <TextBlock Text="Registry, timer and process settings are restored after the simulator exits. DNS flushing and standby-list clearing are one-time actions and naturally repopulate." Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,12,0,0"/>
                                 <TextBlock Text="NVIDIA note: persistence mode is supported. Driver-profile ‘Prefer maximum performance’ is not forced because safe restoration requires NVIDIA NVAPI integration." Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,9,0,0"/>
                             </StackPanel>
@@ -296,7 +304,6 @@
                                     <TextBlock x:Name="DashboardStatusText" Text="STANDBY — monitoring starts when the simulator process is detected." Foreground="{StaticResource MutedTextBrush}" FontFamily="Consolas" Margin="0,5,0,0" TextWrapping="Wrap" />
                                 </StackPanel>
                                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
-                                    <CheckBox x:Name="DashboardEnabledCheck" Content="MONITOR SESSION" IsChecked="True" Margin="0,0,18,0" />
                                     <CheckBox x:Name="DashboardCsvCheck" Content="SAVE CSV" />
                                 </StackPanel>
                             </DockPanel>

@@ -16,7 +16,6 @@ public static class OptimizationProfiles
         options.UseHighResolutionTimer = false;
         options.DisableFullscreenOptimizations = false;
         options.DisablePowerThrottling = false;
-        options.ApplyNetworkMemoryOptimizations = false;
 
         if (profile == OptimizationProfile.Aggressive)
         {
@@ -25,7 +24,6 @@ public static class OptimizationProfiles
             options.UseHighResolutionTimer = true;
             options.DisableFullscreenOptimizations = true;
             options.DisablePowerThrottling = true;
-            options.ApplyNetworkMemoryOptimizations = true;
             return;
         }
     }

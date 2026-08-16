@@ -49,7 +49,7 @@ $manifestPath = Join-Path $packageRoot 'manifest.json'
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 $manifest.content_type = 'MISC'
 $manifest.title = 'VR Optimizer'
-$manifest.package_version = '1.10.1'
+$manifest.package_version = '2.0.0'
 $manifest.total_package_size = [string](($files | Measure-Object Length -Sum).Sum)
 [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 8), $utf8NoBom)
 

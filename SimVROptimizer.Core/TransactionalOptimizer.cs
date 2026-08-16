@@ -6,17 +6,28 @@ namespace SimVROptimizer.Core;
 public sealed class TransactionalOptimizer
 {
     private const string UltimateTemplateGuid = "e9a42b02-d5df-448d-aa00-03f14749eb61";
+    private const string BalancedPlanGuid = "381b4222-f694-41f0-9685-ff5bb260df2e";
     private readonly ICommandRunner _commands;
     private readonly AppPaths _paths;
     private readonly FileLogger _logger;
+    private readonly IApplicationRestarter _applicationRestarter;
+    private readonly ICpuProfileProvider _cpuProfileProvider;
     private SessionJournal? _journal;
     private bool _timerResolutionActive;
+    private string? _sessionPowerPlanGuid;
 
-    public TransactionalOptimizer(ICommandRunner commands, AppPaths paths, FileLogger logger)
+    public TransactionalOptimizer(
+        ICommandRunner commands,
+        AppPaths paths,
+        FileLogger logger,
+        IApplicationRestarter? applicationRestarter = null,
+        ICpuProfileProvider? cpuProfileProvider = null)
     {
         _commands = commands;
         _paths = paths;
         _logger = logger;
+        _applicationRestarter = applicationRestarter ?? new ApplicationRestarter();
+        _cpuProfileProvider = cpuProfileProvider ?? new CpuOptimizer();
     }
 
     public event Action<string>? StatusChanged;
@@ -25,10 +36,26 @@ public sealed class TransactionalOptimizer
 
     public async Task BeginAsync(string simulatorName, OptimizerOptions options, CancellationToken cancellationToken)
     {
-        await BeginAsync(simulatorName, options, [], [], cancellationToken).ConfigureAwait(false);
+        await BeginCoreAsync(simulatorName, options, [], [], cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task BeginAsync(
+    public Task BeginAsync(
+        string simulatorName,
+        OptimizerOptions options,
+        IReadOnlyList<RunningAppCandidate> applications,
+        IReadOnlyList<ServiceCandidate> services,
+        CancellationToken cancellationToken) =>
+        BeginCoreAsync(simulatorName, options, applications, services, cancellationToken);
+
+    public Task BeginAsync(
+        SimulatorDefinition simulator,
+        OptimizerOptions options,
+        IReadOnlyList<RunningAppCandidate> applications,
+        IReadOnlyList<ServiceCandidate> services,
+        CancellationToken cancellationToken) =>
+        BeginCoreAsync(simulator.Name, options, applications, services, cancellationToken);
+
+    private async Task BeginCoreAsync(
         string simulatorName,
         OptimizerOptions options,
         IReadOnlyList<RunningAppCandidate> applications,
@@ -47,22 +74,47 @@ public sealed class TransactionalOptimizer
         if (!options.DryRun) await PersistAsync(cancellationToken).ConfigureAwait(false);
 
         await ReportAsync(options.DryRun ? "Dry-run: no system settings will be changed." : "Recovery journal created.", cancellationToken);
-        if (options.UseUltimatePowerPlan) await ApplyUltimatePowerPlanAsync(options.DryRun, cancellationToken).ConfigureAwait(false);
+        CpuProfile? cpuProfile = null;
+        try { cpuProfile = _cpuProfileProvider.GetProfile(); }
+        catch (Exception exception)
+        {
+            await ReportAsync($"CPU-aware session detection was unavailable ({exception.Message}); selected settings will use their standard behavior.", cancellationToken).ConfigureAwait(false);
+        }
+        var isAmdX3d = cpuProfile is { IsAmd: true, IsX3D: true };
         if (options.EnableNvidiaPersistence) await EnableNvidiaPersistenceAsync(options.DryRun, cancellationToken).ConfigureAwait(false);
         if (options.FlushDnsCache) await FlushDnsCacheAsync(options.DryRun, cancellationToken).ConfigureAwait(false);
+        if (options.UseOpenXrTurboMode)
+        {
+            if (!OpenXrTurboLayer.IsPackageAvailable)
+            {
+                await ReportAsync("OpenXR Turbo Mode skipped: the bundled Turbo Layer files are missing.", cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await ReportAsync("OpenXR Turbo Mode: temporarily registering the bundled asynchronous frame-pacing layer; it will be removed on exit.", cancellationToken).ConfigureAwait(false);
+                await SetRegistryDwordAsync(
+                    RegistryHive.CurrentUser,
+                    OpenXrTurboLayer.RegistryPath,
+                    OpenXrTurboLayer.ManifestPath,
+                    0,
+                    options.DryRun,
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
         if (options.DisableGameDvr)
         {
-            await SetRegistryDwordAsync(RegistryHive.CurrentUser, @"Software\Microsoft\Windows\CurrentVersion\GameDVR", "AppCaptureEnabled", 0, options.DryRun, cancellationToken).ConfigureAwait(false);
-            await SetRegistryDwordAsync(RegistryHive.CurrentUser, @"System\GameConfigStore", "GameDVR_Enabled", 0, options.DryRun, cancellationToken).ConfigureAwait(false);
+            if (isAmdX3d)
+            {
+                await ReportAsync("Game Bar/Game DVR disabling was skipped on AMD X3D so Windows and the AMD chipset drivers can identify the game and manage the cache CCD.", cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await SetRegistryDwordAsync(RegistryHive.CurrentUser, @"Software\Microsoft\Windows\CurrentVersion\GameDVR", "AppCaptureEnabled", 0, options.DryRun, cancellationToken).ConfigureAwait(false);
+                await SetRegistryDwordAsync(RegistryHive.CurrentUser, @"System\GameConfigStore", "GameDVR_Enabled", 0, options.DryRun, cancellationToken).ConfigureAwait(false);
+            }
         }
         if (options.DisableFullscreenOptimizations)
             await SetRegistryDwordAsync(RegistryHive.CurrentUser, @"System\GameConfigStore", "GameDVR_FSEBehaviorMode", 2, options.DryRun, cancellationToken).ConfigureAwait(false);
-        if (options.ApplyNetworkMemoryOptimizations)
-        {
-            const string multimediaPath = @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile";
-            await SetRegistryDwordAsync(RegistryHive.LocalMachine, multimediaPath, "NetworkThrottlingIndex", uint.MaxValue, options.DryRun, cancellationToken).ConfigureAwait(false);
-            await SetRegistryDwordAsync(RegistryHive.LocalMachine, multimediaPath, "SystemResponsiveness", 0, options.DryRun, cancellationToken).ConfigureAwait(false);
-        }
         if (options.UseHighResolutionTimer) await EnableHighResolutionTimerAsync(options.DryRun, cancellationToken).ConfigureAwait(false);
         if (options.ClearStandbyMemory) await ClearStandbyMemoryAsync(options.DryRun, cancellationToken).ConfigureAwait(false);
         if (options.Profile == OptimizationProfile.Aggressive)
@@ -70,8 +122,16 @@ public sealed class TransactionalOptimizer
             foreach (var service in services.Where(item => item.Selected && item.CanStop))
                 await StopServiceIfRunningAsync(service.ServiceName, options.DryRun, cancellationToken).ConfigureAwait(false);
         }
-        foreach (var application in applications.Where(item => item.Selected && item.CanStop))
+        foreach (var application in applications
+                     .Where(item => item.Selected && item.CanStop)
+                     .OrderBy(item => item.ProcessName.Equals("ProcessGovernor", StringComparison.OrdinalIgnoreCase)
+                         ? 1
+                         : ApplicationClassifier.IsPowerPlanController(item.ProcessName) ? 0 : 2))
             await StopApplicationAsync(application, options.DryRun, cancellationToken).ConfigureAwait(false);
+        // Close power-plan governors before selecting the session plan so they
+        // cannot immediately replace Windows Balanced or Ultimate Performance.
+        if (options.UseUltimatePowerPlan)
+            await ApplyCpuAwarePowerPlanAsync(cpuProfile, options.DryRun, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<RestorationReport> RestoreAsync(CancellationToken cancellationToken = default)
@@ -92,6 +152,7 @@ public sealed class TransactionalOptimizer
         if (journal is null || journal.DryRun)
         {
             _journal = null;
+            _sessionPowerPlanGuid = null;
             if (File.Exists(_paths.JournalFile)) File.Delete(_paths.JournalFile);
             var emptyReport = new RestorationReport
             {
@@ -127,8 +188,42 @@ public sealed class TransactionalOptimizer
 
         File.Delete(_paths.JournalFile);
         _journal = null;
+        _sessionPowerPlanGuid = null;
         await ReportAsync($"System state restored and verified: {report.RestoredCount} restored, {report.LeftClosedCount} application(s) left closed, {report.ManualActionCount} manual action(s), 0 failed.", cancellationToken).ConfigureAwait(false);
         return report;
+    }
+
+    private async Task ApplyCpuAwarePowerPlanAsync(CpuProfile? profile, bool dryRun, CancellationToken cancellationToken)
+    {
+        if (profile is { IsAmd: true, IsX3D: true })
+        {
+            await ApplyAmdX3dBalancedPlanAsync(profile, dryRun, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        await ApplyUltimatePowerPlanAsync(dryRun, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task ApplyAmdX3dBalancedPlanAsync(CpuProfile profile, bool dryRun, CancellationToken cancellationToken)
+    {
+        await ReportAsync($"Power plan: AMD X3D detected ({profile.Model}); would use Windows Balanced for cache-aware CCD scheduling.", cancellationToken).ConfigureAwait(false);
+        if (dryRun) return;
+
+        _sessionPowerPlanGuid = BalancedPlanGuid;
+
+        var currentResult = await RequiredCommandAsync("powercfg.exe", ["/getactivescheme"], cancellationToken).ConfigureAwait(false);
+        var originalGuid = OutputParsers.ParsePowerPlanGuid(currentResult.StandardOutput)
+            ?? throw new InvalidOperationException("Could not determine the active power plan.");
+        if (string.Equals(originalGuid, BalancedPlanGuid, StringComparison.OrdinalIgnoreCase))
+        {
+            await ReportAsync("Windows Balanced power plan retained for AMD X3D scheduling.", cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        await RecordAsync(new StateMutation(MutationKind.PowerPlan, "active", originalGuid, BalancedPlanGuid, DateTimeOffset.UtcNow), cancellationToken).ConfigureAwait(false);
+        await RequiredCommandAsync("powercfg.exe", ["/setactive", BalancedPlanGuid], cancellationToken).ConfigureAwait(false);
+        await VerifyOrReapplySessionPowerPlanAsync(cancellationToken).ConfigureAwait(false);
+        await ReportAsync("Windows Balanced power plan enabled and verified for AMD X3D scheduling; the original plan will be restored on exit.", cancellationToken).ConfigureAwait(false);
     }
 
     private async Task ApplyUltimatePowerPlanAsync(bool dryRun, CancellationToken cancellationToken)
@@ -141,11 +236,27 @@ public sealed class TransactionalOptimizer
             ?? throw new InvalidOperationException("Could not determine the active power plan.");
 
         var temporaryGuid = Guid.NewGuid().ToString("D");
+        _sessionPowerPlanGuid = temporaryGuid;
         await RecordAsync(new StateMutation(MutationKind.CreatedPowerPlan, temporaryGuid, "absent", "present", DateTimeOffset.UtcNow), cancellationToken);
         await RequiredCommandAsync("powercfg.exe", ["/duplicatescheme", UltimateTemplateGuid, temporaryGuid], cancellationToken).ConfigureAwait(false);
         await RecordAsync(new StateMutation(MutationKind.PowerPlan, "active", originalGuid, temporaryGuid, DateTimeOffset.UtcNow), cancellationToken);
         await RequiredCommandAsync("powercfg.exe", ["/setactive", temporaryGuid], cancellationToken).ConfigureAwait(false);
         await ReportAsync("Temporary Ultimate Performance plan enabled.", cancellationToken);
+    }
+
+    public async Task VerifyOrReapplySessionPowerPlanAsync(CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(_sessionPowerPlanGuid)) return;
+
+        var active = await RequiredCommandAsync("powercfg.exe", ["/getactivescheme"], cancellationToken).ConfigureAwait(false);
+        if (string.Equals(OutputParsers.ParsePowerPlanGuid(active.StandardOutput), _sessionPowerPlanGuid, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        await ReportAsync("The selected session power plan was changed by another utility; applying it again after simulator launch.", cancellationToken).ConfigureAwait(false);
+        await RequiredCommandAsync("powercfg.exe", ["/setactive", _sessionPowerPlanGuid], cancellationToken).ConfigureAwait(false);
+        var verified = await RequiredCommandAsync("powercfg.exe", ["/getactivescheme"], cancellationToken).ConfigureAwait(false);
+        if (!string.Equals(OutputParsers.ParsePowerPlanGuid(verified.StandardOutput), _sessionPowerPlanGuid, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Windows Balanced could not remain active. Disable automatic power-plan switching in Process Lasso or another power utility and try again.");
     }
 
     private async Task StopServiceIfRunningAsync(string serviceName, bool dryRun, CancellationToken cancellationToken)
@@ -202,7 +313,9 @@ public sealed class TransactionalOptimizer
 
     private async Task StopApplicationAsync(RunningAppCandidate application, bool dryRun, CancellationToken cancellationToken)
     {
-        const string recoveryDescription = "remain closed after the flight";
+        var recoveryDescription = IsOneDrive(application.ProcessName)
+            ? "restart after the flight"
+            : "remain closed after the flight";
         await ReportAsync($"Application {application.DisplayName}: would stop for this session and {recoveryDescription}.", cancellationToken);
         if (dryRun) return;
 
@@ -269,10 +382,15 @@ public sealed class TransactionalOptimizer
                     throw new InvalidOperationException($"GPU {mutation.Target} persistence mode did not return to {mutation.OriginalValue}.");
                 return Restored(mutation, "NVIDIA persistence state is verified.");
             case MutationKind.Process:
-                var runningProcesses = Process.GetProcessesByName(mutation.Target);
-                var isRunning = runningProcesses.Length > 0;
-                foreach (var runningProcess in runningProcesses) runningProcess.Dispose();
-                if (isRunning) return Restored(mutation, "Application is already running.");
+                if (_applicationRestarter.IsRunning(mutation.Target))
+                    return Restored(mutation, "Application is already running.");
+                if (IsOneDrive(mutation.Target))
+                {
+                    await ReportAsync("Restoring Microsoft OneDrive...", cancellationToken).ConfigureAwait(false);
+                    if (!await _applicationRestarter.RestartAndVerifyAsync(mutation.Target, mutation.OriginalValue, cancellationToken).ConfigureAwait(false))
+                        throw new InvalidOperationException("Microsoft OneDrive did not restart within 15 seconds.");
+                    return Restored(mutation, "Microsoft OneDrive was restarted and its running state is verified.");
+                }
                 return new(mutation.Kind, mutation.Target, RestorationOutcome.LeftClosed,
                     "Application was intentionally left closed after the flight and was not relaunched.");
             case MutationKind.RegistryValue:
@@ -287,6 +405,9 @@ public sealed class TransactionalOptimizer
 
     private static RestorationItemResult Restored(StateMutation mutation, string detail) =>
         new(mutation.Kind, mutation.Target, RestorationOutcome.Restored, detail);
+
+    private static bool IsOneDrive(string processName) =>
+        string.Equals(processName, "OneDrive", StringComparison.OrdinalIgnoreCase);
 
     private async Task FlushDnsCacheAsync(bool dryRun, CancellationToken cancellationToken)
     {

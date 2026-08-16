@@ -1,22 +1,20 @@
 {
-    "dependencies":  [
-
-                     ],
-    "content_type":  "MISC",
-    "title":  "VR Optimizer",
-    "manufacturer":  "FlightDeckTools",
-    "creator":  "Andrew MacBrown",
-    "package_version":  "1.10.1",
-    "minimum_game_version":  "1.7.35",
-    "minimum_compatibility_version":  "7.26.0.214",
-    "export_type":  "Community",
-    "builder":  "Microsoft Flight Simulator 2024",
-    "package_order_hint":  "",
-    "release_notes":  {
-                          "neutral":  {
-                                          "LastUpdate":  "",
-                                          "OlderHistory":  ""
-                                      }
-                      },
-    "total_package_size":  "20636"
+  "dependencies": [],
+  "content_type": "MISC",
+  "title": "VR Optimizer",
+  "manufacturer": "FlightDeckTools",
+  "creator": "Andrew MacBrown",
+  "package_version": "2.0.0",
+  "minimum_game_version": "1.7.35",
+  "minimum_compatibility_version": "7.26.0.214",
+  "export_type": "Community",
+  "builder": "Microsoft Flight Simulator 2024",
+  "package_order_hint": "",
+  "release_notes": {
+    "neutral": {
+      "LastUpdate": "",
+      "OlderHistory": ""
+    }
+  },
+  "total_package_size": "21448"
 }

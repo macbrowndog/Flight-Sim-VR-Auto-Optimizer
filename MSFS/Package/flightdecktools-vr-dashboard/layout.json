@@ -1,29 +1,29 @@
 {
-    "content":  [
-                    {
-                        "path":  "html_ui/icons/toolbar/icon_toolbar_flightdecktools_vr_dashboard.svg",
-                        "size":  349,
-                        "date":  134310653948883968
-                    },
-                    {
-                        "path":  "html_ui/ingamepanels/flightdecktools_vr_dashboard/flightdecktools_vr_dashboard.css",
-                        "size":  4183,
-                        "date":  134310805006629789
-                    },
-                    {
-                        "path":  "html_ui/ingamepanels/flightdecktools_vr_dashboard/flightdecktools_vr_dashboard.html",
-                        "size":  4012,
-                        "date":  134310792230942382
-                    },
-                    {
-                        "path":  "html_ui/ingamepanels/flightdecktools_vr_dashboard/flightdecktools_vr_dashboard.js",
-                        "size":  11318,
-                        "date":  134310793914407485
-                    },
-                    {
-                        "path":  "ingamepanels/flightdecktools-vr-dashboard.spb",
-                        "size":  774,
-                        "date":  134310658410000001
-                    }
-                ]
+  "content": [
+    {
+      "path": "html_ui/icons/toolbar/icon_toolbar_flightdecktools_vr_dashboard.svg",
+      "size": 349,
+      "date": 134310653948883968
+    },
+    {
+      "path": "html_ui/ingamepanels/flightdecktools_vr_dashboard/flightdecktools_vr_dashboard.css",
+      "size": 4465,
+      "date": 134313215042007232
+    },
+    {
+      "path": "html_ui/ingamepanels/flightdecktools_vr_dashboard/flightdecktools_vr_dashboard.html",
+      "size": 4161,
+      "date": 134313215048350841
+    },
+    {
+      "path": "html_ui/ingamepanels/flightdecktools_vr_dashboard/flightdecktools_vr_dashboard.js",
+      "size": 11699,
+      "date": 134313215054849451
+    },
+    {
+      "path": "ingamepanels/flightdecktools-vr-dashboard.spb",
+      "size": 774,
+      "date": 134310658410000001
+    }
+  ]
 }

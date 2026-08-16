@@ -53,10 +53,14 @@ ingame-ui#FlightDeckToolsDashboardPanel .ingameUiWrapper > #dashboard { flex: 0 
 
 .eyebrow { font-size: 16px; }
 .source-status { color: var(--deck-cyan); margin-top: 5px; font-size: 13px; }
+.status-stack { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
 .link-state { white-space: nowrap; color: var(--deck-muted); font-weight: 700; }
 .link-state span { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; background: var(--deck-red); }
 .link-state.online { color: var(--deck-green); }
 .link-state.online span { background: var(--deck-green); }
+.turbo-state { white-space: nowrap; font-size: 12px; font-weight: 700; color: var(--deck-muted); }
+.turbo-state.on { color: var(--deck-green); }
+.turbo-state.off { color: var(--deck-muted); }
 
 .metric-grid {
   display: grid;

@@ -30,10 +30,14 @@ public partial class MainWindow : Window
     private readonly Queue<PerformanceTelemetrySample> _dashboardHistory = new();
     private int _dashboardStutterCount;
     private int _dashboardCpuSpikeCount;
+    private bool _restartRequiredAfterSession;
 
     public MainWindow(bool continueSession = false, bool restoreLastSession = false)
     {
         InitializeComponent();
+        var version = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version;
+        var versionText = version is null ? "UNKNOWN" : $"{version.Major}.{version.Minor}.{version.Build}";
+        HeaderVersionLabel.Text = $"ANDREW BROWN © 2026 • VERSION {versionText}";
         _continueSession = continueSession;
         _restoreLastSession = restoreLastSession;
         _paths.EnsureCreated();
@@ -41,7 +45,11 @@ public partial class MainWindow : Window
         var commands = new CommandRunner();
         var optimizer = new TransactionalOptimizer(commands, _paths, logger);
         _vrRuntimeLauncher = new VrRuntimeLauncher(logger);
-        _coordinator = new SessionCoordinator(optimizer, new SimulatorLauncher(logger), _vrRuntimeLauncher);
+        _coordinator = new SessionCoordinator(
+            optimizer,
+            new SimulatorLauncher(logger),
+            _vrRuntimeLauncher,
+            new XboxSessionCleanup(commands, logger));
         _scanner = new SystemScanner(commands);
         _recoveryShortcuts = new RecoveryShortcutService();
         _coordinator.StatusChanged += AppendStatus;
@@ -230,6 +238,11 @@ public partial class MainWindow : Window
         {
             _sessionCancellation?.Dispose();
             _sessionCancellation = null;
+            if (!_coordinator.HasRecoveryJournal)
+            {
+                _restartRequiredAfterSession = true;
+                AppendStatus("Flight session complete. Restart VR Auto-Optimizer before starting another flight.");
+            }
             SetRunningState(false);
             UpdateRecoveryState();
             if (!_coordinator.HasRecoveryJournal) TryMarkRecoveryComplete();
@@ -374,13 +387,13 @@ public partial class MainWindow : Window
             UseVendorAwareCpuSets = CpuSetsCheck.IsChecked == true,
             EnableNvidiaPersistence = NvidiaCheck.IsChecked == true,
             UseMsfs2024FastLaunch = FastLaunchCheck.IsChecked == true,
+            UseOpenXrTurboMode = OpenXrTurboCheck.IsChecked == true,
             FlushDnsCache = FlushDnsCheck.IsChecked == true,
             DisableGameDvr = GameDvrCheck.IsChecked == true,
             ClearStandbyMemory = StandbyMemoryCheck.IsChecked == true,
             UseHighResolutionTimer = TimerResolutionCheck.IsChecked == true,
             DisableFullscreenOptimizations = FullscreenOptimizationsCheck.IsChecked == true,
             DisablePowerThrottling = PowerThrottlingCheck.IsChecked == true,
-            ApplyNetworkMemoryOptimizations = NetworkMemoryCheck.IsChecked == true,
             ContentCreatorMode = ContentCreatorCheck.IsChecked == true,
             VrRuntime = VrRuntimeCombo.SelectedItem is VrRuntimePreference runtime ? runtime : VrRuntimePreference.None,
             LaunchTimeoutSeconds = timeout,
@@ -405,13 +418,13 @@ public partial class MainWindow : Window
         CpuSetsCheck.IsChecked = _config.Options.UseVendorAwareCpuSets;
         NvidiaCheck.IsChecked = _config.Options.EnableNvidiaPersistence;
         FastLaunchCheck.IsChecked = _config.Options.UseMsfs2024FastLaunch;
+        OpenXrTurboCheck.IsChecked = _config.Options.UseOpenXrTurboMode;
         FlushDnsCheck.IsChecked = _config.Options.FlushDnsCache;
         GameDvrCheck.IsChecked = _config.Options.DisableGameDvr;
         StandbyMemoryCheck.IsChecked = _config.Options.ClearStandbyMemory;
         TimerResolutionCheck.IsChecked = _config.Options.UseHighResolutionTimer;
         FullscreenOptimizationsCheck.IsChecked = _config.Options.DisableFullscreenOptimizations;
         PowerThrottlingCheck.IsChecked = _config.Options.DisablePowerThrottling;
-        NetworkMemoryCheck.IsChecked = _config.Options.ApplyNetworkMemoryOptimizations;
         ContentCreatorCheck.IsChecked = _config.Options.ContentCreatorMode;
         VrRuntimeCombo.ItemsSource = Enum.GetValues<VrRuntimePreference>();
         VrRuntimeCombo.SelectedItem = _config.Options.VrRuntime;
@@ -426,6 +439,7 @@ public partial class MainWindow : Window
             .Select(rule => $"{rule.ProcessName}={rule.RestartExecutablePath}"));
         RefreshSavedProfiles();
         _applyingConfig = false;
+        ApplyCpuAwareControlRules();
         UpdateModeDescription();
     }
 
@@ -459,6 +473,17 @@ public partial class MainWindow : Window
                 : profile.IsAmd ? "AMD"
                 : profile.IsIntel ? "Intel"
                 : "Unknown vendor";
+            if (profile.IsAmd && profile.IsX3D)
+            {
+                PowerPlanCheck.Content = "AMD X3D / Windows Balanced (recommended)";
+                PowerPlanCheck.ToolTip = "Keeps or temporarily selects Windows Balanced so AMD's chipset drivers, Game Mode and Windows scheduler can manage the cache CCD correctly. The original plan is restored after the flight.";
+            }
+            else
+            {
+                PowerPlanCheck.Content = "ULTIMATE PERFORMANCE / temporary";
+                PowerPlanCheck.ToolTip = "Temporarily enables Ultimate Performance for the flight and restores the original Windows power plan afterward.";
+            }
+            ApplyCpuAwareControlRules();
             CpuInfoText.Text = $"Detected CPU: {profile.Model} · {type} · {profile.PhysicalCoreCount} cores / {profile.LogicalProcessorCount} logical processors";
             DashCpuName.Text = profile.Model;
             var groups = Math.Max(1, profile.CpuSets.Select(item => item.Group).Distinct().Count());
@@ -475,14 +500,15 @@ public partial class MainWindow : Window
     private async void ScanButton_Click(object sender, RoutedEventArgs e) => await ScanSystemAsync();
 
     private void SimulatorCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e) =>
-        UpdateFastLaunchAvailability();
+        UpdateSimulatorOptionAvailability();
 
-    private void UpdateFastLaunchAvailability()
+    private void UpdateSimulatorOptionAvailability()
     {
-        if (FastLaunchCheck is null) return;
-        var isMsfs2024 = SimulatorCombo.SelectedItem is DetectedSimulator detected
-            && detected.Definition.Id is "msfs2024-steam" or "msfs2024-store";
+        if (FastLaunchCheck is null || OpenXrTurboCheck is null) return;
+        var simulatorId = (SimulatorCombo.SelectedItem as DetectedSimulator)?.Definition.Id;
+        var isMsfs2024 = simulatorId is "msfs2024-steam" or "msfs2024-store";
         FastLaunchCheck.IsEnabled = !_coordinator.IsRunning && isMsfs2024;
+        OpenXrTurboCheck.IsEnabled = !_coordinator.IsRunning && OpenXrTurboLayer.IsPackageAvailable;
     }
 
     private async void SaveCustomButton_Click(object sender, RoutedEventArgs e)
@@ -526,7 +552,7 @@ public partial class MainWindow : Window
             if (processId.HasValue && DashboardEnabledCheck.IsChecked == true)
             {
                 var simulatorName = (SimulatorCombo.SelectedItem as DetectedSimulator)?.Name ?? "Flight simulator";
-                _toolbarTelemetry.BeginSession(simulatorName);
+                _toolbarTelemetry.BeginSession(simulatorName, _config.Options.UseOpenXrTurboMode);
                 _dashboardHistory.Clear();
                 DashFps.Text = "—";
                 DashAverageFps.Text = "—";
@@ -857,7 +883,7 @@ public partial class MainWindow : Window
         TimerResolutionCheck.IsChecked = defaults.UseHighResolutionTimer;
         FullscreenOptimizationsCheck.IsChecked = defaults.DisableFullscreenOptimizations;
         PowerThrottlingCheck.IsChecked = defaults.DisablePowerThrottling;
-        NetworkMemoryCheck.IsChecked = defaults.ApplyNetworkMemoryOptimizations;
+        ApplyCpuAwareControlRules();
         if (profile == OptimizationProfile.Standard)
         {
             foreach (var service in _services) service.Selected = false;
@@ -1048,7 +1074,7 @@ public partial class MainWindow : Window
 
     private void SetRunningState(bool running)
     {
-        StartButton.IsEnabled = !running && !_coordinator.HasRecoveryJournal;
+        StartButton.IsEnabled = !running && !_coordinator.HasRecoveryJournal && !_restartRequiredAfterSession;
         CancelButton.IsEnabled = running && _sessionCancellation is not null;
         RestoreButton.IsEnabled = !running && _coordinator.HasRecoveryJournal;
         ReportButton.IsEnabled = !running && File.Exists(_paths.RestorationReportFile);
@@ -1066,13 +1092,14 @@ public partial class MainWindow : Window
         FastLaunchCheck.IsEnabled = !running
             && SimulatorCombo.SelectedItem is DetectedSimulator detected
             && detected.Definition.Id is "msfs2024-steam" or "msfs2024-store";
+        OpenXrTurboCheck.IsEnabled = !running && OpenXrTurboLayer.IsPackageAvailable;
         FlushDnsCheck.IsEnabled = !running;
-        GameDvrCheck.IsEnabled = !running;
+        GameDvrCheck.IsEnabled = !running && _cpuProfile is not { IsAmd: true, IsX3D: true };
+        if (_cpuProfile is { IsAmd: true, IsX3D: true }) GameDvrCheck.IsChecked = false;
         StandbyMemoryCheck.IsEnabled = !running;
         TimerResolutionCheck.IsEnabled = !running;
         FullscreenOptimizationsCheck.IsEnabled = !running;
         PowerThrottlingCheck.IsEnabled = !running;
-        NetworkMemoryCheck.IsEnabled = !running;
         TimeoutBox.IsEnabled = !running;
         CustomKillBox.IsEnabled = !running;
         CustomRestartBox.IsEnabled = false;
@@ -1081,7 +1108,25 @@ public partial class MainWindow : Window
         DashboardEnabledCheck.IsEnabled = !running;
         DashboardCsvCheck.IsEnabled = !running;
         RefreshToolbarPanelStatus();
-        if (!running) SetStateDisplay("READY", "GreenBrush");
+        if (!running)
+            SetStateDisplay(_restartRequiredAfterSession ? "RESTART REQUIRED" : "READY", _restartRequiredAfterSession ? "AccentBrush" : "GreenBrush");
+    }
+
+    private void ApplyCpuAwareControlRules()
+    {
+        if (GameDvrCheck is null) return;
+        if (_cpuProfile is { IsAmd: true, IsX3D: true })
+        {
+            GameDvrCheck.IsChecked = false;
+            GameDvrCheck.IsEnabled = false;
+            GameDvrCheck.Content = "GAME BAR / kept on for AMD X3D scheduling";
+            GameDvrCheck.ToolTip = "Xbox Game Bar must remain available so Windows and AMD's chipset drivers can identify games and direct them to the cache CCD.";
+            return;
+        }
+
+        GameDvrCheck.Content = "GAME BAR / GAME DVR off temporarily";
+        GameDvrCheck.ToolTip = "Temporarily disables Game Bar capture and Game DVR for the flight session.";
+        GameDvrCheck.IsEnabled = !_coordinator.IsRunning;
     }
 
     private void SetStateDisplay(string text, string brushResource)
@@ -1093,7 +1138,7 @@ public partial class MainWindow : Window
     private void UpdateRecoveryState()
     {
         RestoreButton.IsEnabled = _coordinator.HasRecoveryJournal && !_coordinator.IsRunning;
-        StartButton.IsEnabled = !_coordinator.HasRecoveryJournal && !_coordinator.IsRunning;
+        StartButton.IsEnabled = !_coordinator.HasRecoveryJournal && !_coordinator.IsRunning && !_restartRequiredAfterSession;
         if (SimulatorCombo.Items.Count == 0) StartButton.IsEnabled = false;
     }
 

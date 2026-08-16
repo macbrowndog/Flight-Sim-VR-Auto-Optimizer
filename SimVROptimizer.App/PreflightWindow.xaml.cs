@@ -6,14 +6,11 @@ namespace SimVROptimizer.App;
 
 public partial class PreflightWindow : Window
 {
-    private readonly bool _reportCanProceed;
-
     public PreflightWindow(PreflightReport report)
     {
-        _reportCanProceed = report.CanProceed;
         InitializeComponent();
         CheckItems.ItemsSource = report.Items.Select(PreflightDisplayItem.From).ToArray();
-        ContinueButton.IsEnabled = false;
+        ContinueButton.IsEnabled = report.CanProceed;
 
         if (report.CanProceed)
         {
@@ -35,11 +32,6 @@ public partial class PreflightWindow : Window
 
     private void Continue_Click(object sender, RoutedEventArgs e) => DialogResult = true;
     private void Cancel_Click(object sender, RoutedEventArgs e) => DialogResult = false;
-    private void SaveWorkCheck_Changed(object sender, RoutedEventArgs e)
-    {
-        if (ContinueButton is not null)
-            ContinueButton.IsEnabled = _reportCanProceed && SaveWorkCheck.IsChecked == true;
-    }
 
     private Brush FindBrush(string key) => (Brush)FindResource(key);
     private static Brush Brush(string color) => new SolidColorBrush((Color)ColorConverter.ConvertFromString(color));

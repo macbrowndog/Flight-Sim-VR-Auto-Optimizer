@@ -7,13 +7,19 @@ public sealed class SessionCoordinator
     private readonly TransactionalOptimizer _optimizer;
     private readonly SimulatorLauncher _launcher;
     private readonly VrRuntimeLauncher? _vrRuntimeLauncher;
+    private readonly IXboxSessionCleanup? _xboxSessionCleanup;
     private readonly SemaphoreSlim _sessionGate = new(1, 1);
 
-    public SessionCoordinator(TransactionalOptimizer optimizer, SimulatorLauncher launcher, VrRuntimeLauncher? vrRuntimeLauncher = null)
+    public SessionCoordinator(
+        TransactionalOptimizer optimizer,
+        SimulatorLauncher launcher,
+        VrRuntimeLauncher? vrRuntimeLauncher = null,
+        IXboxSessionCleanup? xboxSessionCleanup = null)
     {
         _optimizer = optimizer;
         _launcher = launcher;
         _vrRuntimeLauncher = vrRuntimeLauncher;
+        _xboxSessionCleanup = xboxSessionCleanup;
     }
 
     public event Action<string>? StatusChanged
@@ -23,12 +29,14 @@ public sealed class SessionCoordinator
             _optimizer.StatusChanged += value;
             _launcher.StatusChanged += value;
             if (_vrRuntimeLauncher is not null) _vrRuntimeLauncher.StatusChanged += value;
+            if (_xboxSessionCleanup is not null) _xboxSessionCleanup.StatusChanged += value;
         }
         remove
         {
             _optimizer.StatusChanged -= value;
             _launcher.StatusChanged -= value;
             if (_vrRuntimeLauncher is not null) _vrRuntimeLauncher.StatusChanged -= value;
+            if (_xboxSessionCleanup is not null) _xboxSessionCleanup.StatusChanged -= value;
         }
     }
 
@@ -57,11 +65,12 @@ public sealed class SessionCoordinator
         IsRunning = true;
         Process? process = null;
         VrRuntimeSession? runtimeSession = null;
+        var simulatorExited = false;
         try
         {
             ReportProgress(SessionStage.Prepare, "PREPARE", "Validating the selected simulator and recovery state.");
             ReportProgress(SessionStage.Optimize, "OPTIMIZE", $"Applying the {options.Profile} profile and selected granular controls.");
-            await _optimizer.BeginAsync(simulator.Name, options, applications, services, cancellationToken).ConfigureAwait(false);
+            await _optimizer.BeginAsync(simulator, options, applications, services, cancellationToken).ConfigureAwait(false);
             ReportProgress(SessionStage.VrRuntime, "VR RUNTIME", options.VrRuntime == VrRuntimePreference.None
                 ? "No automatic VR runtime selected."
                 : $"Starting or checking {options.VrRuntime}.");
@@ -73,7 +82,9 @@ public sealed class SessionCoordinator
             if (process is not null)
             {
                 SimulatorProcessChanged?.Invoke(process.Id);
+                await _optimizer.VerifyOrReapplySessionPowerPlanAsync(cancellationToken).ConfigureAwait(false);
                 await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+                simulatorExited = true;
             }
         }
         finally
@@ -83,6 +94,14 @@ public sealed class SessionCoordinator
                 ReportProgress(SessionStage.Restore, "RESTORE", "Returning the recorded system and runtime state.");
                 if (process is not null)
                     await _launcher.RestoreProcessTuningAsync(process, CancellationToken.None).ConfigureAwait(false);
+                if (simulatorExited && IsMicrosoftFlightSimulator(simulator) && _xboxSessionCleanup is not null)
+                {
+                    try { await _xboxSessionCleanup.CleanupAsync(CancellationToken.None).ConfigureAwait(false); }
+                    catch (Exception exception)
+                    {
+                        ReportProgress(SessionStage.Restore, "RESTORE", "Xbox post-flight cleanup could not complete: " + exception.Message);
+                    }
+                }
                 if (_vrRuntimeLauncher is not null)
                     await _vrRuntimeLauncher.RestoreAsync(runtimeSession, CancellationToken.None).ConfigureAwait(false);
                 await _optimizer.RestoreAsync(CancellationToken.None).ConfigureAwait(false);
@@ -101,4 +120,7 @@ public sealed class SessionCoordinator
 
     private void ReportProgress(SessionStage stage, string title, string detail) =>
         ProgressChanged?.Invoke(new SessionProgress(stage, title, detail));
+
+    private static bool IsMicrosoftFlightSimulator(SimulatorDefinition simulator) =>
+        simulator.Id.StartsWith("msfs", StringComparison.OrdinalIgnoreCase);
 }

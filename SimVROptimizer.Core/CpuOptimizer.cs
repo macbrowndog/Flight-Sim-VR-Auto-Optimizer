@@ -5,6 +5,11 @@ using Microsoft.Win32;
 
 namespace SimVROptimizer.Core;
 
+public interface ICpuProfileProvider
+{
+    CpuProfile GetProfile();
+}
+
 public sealed record CpuOptimizationScope(
     ProcessPriorityClass OriginalPriority,
     IReadOnlyList<uint> OriginalCpuSetIds,
@@ -22,7 +27,7 @@ public struct ProcessPowerThrottlingState
     public uint StateMask;
 }
 
-public sealed class CpuOptimizer
+public sealed class CpuOptimizer : ICpuProfileProvider
 {
     private const int ErrorInsufficientBuffer = 122;
     private const int ProcessPowerThrottling = 4;

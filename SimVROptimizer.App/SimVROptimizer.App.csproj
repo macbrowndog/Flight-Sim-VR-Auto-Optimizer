@@ -6,7 +6,7 @@
     <RootNamespace>SimVROptimizer.App</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
-    <Version>1.10.1</Version>
+    <Version>2.0.0</Version>
     <Product>VR Auto-Optimizer</Product>
     <Description>Transactional flight simulator session optimizer for Windows.</Description>
   </PropertyGroup>
@@ -16,6 +16,9 @@
   <ItemGroup>
     <Resource Include="Assets\AppIcon.ico" />
     <Content Include="Tools\PresentMon-2.5.1-x64.exe" CopyToOutputDirectory="PreserveNewest" Link="Tools\PresentMon-2.5.1-x64.exe" />
+    <Content Include="..\TurboLayer\bin\VR_Optimizer_Turbo_Layer.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" Link="Tools\TurboLayer\VR_Optimizer_Turbo_Layer.dll" />
+    <Content Include="..\TurboLayer\bin\VR_Optimizer_Turbo_Layer.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" Link="Tools\TurboLayer\VR_Optimizer_Turbo_Layer.json" />
+    <Content Include="..\TurboLayer\bin\LICENSES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" Link="Tools\TurboLayer\LICENSES.md" />
     <Content Include="..\MSFS\Package\flightdecktools-vr-dashboard\**\*" CopyToOutputDirectory="PreserveNewest" Link="MSFS\flightdecktools-vr-dashboard\%(RecursiveDir)%(Filename)%(Extension)" />
     <Content Include="..\THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" Link="THIRD-PARTY-NOTICES.md" />
   </ItemGroup>

@@ -4,5 +4,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\SimVROptimizer.Core\SimVROptimizer.Core.csproj" />
+    <Content Include="..\TurboLayer\bin\VR_Optimizer_Turbo_Layer.dll" CopyToOutputDirectory="PreserveNewest" Link="Tools\TurboLayer\VR_Optimizer_Turbo_Layer.dll" />
+    <Content Include="..\TurboLayer\bin\VR_Optimizer_Turbo_Layer.json" CopyToOutputDirectory="PreserveNewest" Link="Tools\TurboLayer\VR_Optimizer_Turbo_Layer.json" />
   </ItemGroup>
 </Project>

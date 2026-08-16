@@ -5,7 +5,7 @@ VR Auto-Optimizer is a .NET 8 WPF application for launching selected Windows fli
 It scans the local PC, explains the likely MSFS impact of running applications and services, applies selected performance settings, launches the simulator, monitors the exact new simulator process, and restores recorded system state when the flight ends.
 
 > [!IMPORTANT]
-> **Run VR Auto-Optimizer as Administrator when using the Aggressive profile.** Aggressive features require elevated Windows permissions, including stopping and restarting services, changing protected registry values, applying system-level network and memory tuning, and restoring those settings afterward. Right-click `SimVROptimizer.exe` and select **Run as administrator**, then approve the Windows User Account Control prompt. Without administrator access, service stopping and other Aggressive operations may fail or be skipped.
+> **Run VR Auto-Optimizer as Administrator when using the Aggressive profile.** Aggressive features require elevated Windows permissions, including stopping and restarting services, changing protected registry values, and restoring those settings afterward. Right-click `SimVROptimizer.exe` and select **Run as administrator**, then approve the Windows User Account Control prompt. Without administrator access, service stopping and other Aggressive operations may fail or be skipped.
 
 ## Features
 
@@ -17,19 +17,21 @@ It scans the local PC, explains the likely MSFS impact of running applications a
 - Configurable Virtual Desktop, Pimax Play, SteamVR, or no-runtime launching
 - Graceful SteamVR shutdown waits for Bluetooth base-station standby instead of force-closing the runtime
 - Optional `-FastLaunch` startup for Microsoft Flight Simulator 2024 on both Steam and Microsoft Store
+- Optional OpenXR Turbo frame-pacing layer, bundled with VR Auto-Optimizer and transactionally registered only for the flight session; OpenXR Toolkit is not required
 - Live five-stage Prepare, Optimize, VR Runtime, Simulator, and Restore pipeline
-- Live performance dashboard with simulator FPS, frame time, average and 1% low FPS, system/simulator CPU, compact processor-load summaries, simulator threads, memory, spike detection, stutter detection, and optional CSV logging
+- Live performance dashboard with simulator FPS, frame time, average and 1% low FPS, system/simulator CPU, compact processor-load summaries, MainThread timing, memory, spike detection, stutter detection, and optional CSV logging
 - Movable MSFS 2024 in-simulator VR toolbar dashboard with the same live metrics, graphs, AMD CCD0/CCD1 load summaries, and spike/stutter counters over a loopback-only read-only connection
 - Persistent custom process kill rules; applications stopped for a flight remain closed during restoration
 - In-app custom-list instructions and non-saving examples for process names and optional restart paths
-- Automatic application and service restoration through a transaction journal
+- Automatic service and system-setting restoration through a transaction journal; OneDrive is restored while other selected applications intentionally remain closed
 - Verified per-item restoration report for applications, services, power plans, NVIDIA state, and registry values
 - Desktop “Restore Last Session” shortcut plus automatic recovery launch after the next Windows sign-in when a journal is active
-- CPU vendor/model and topology detection with AMD X3D-safe scheduling
+- CPU vendor/model and topology detection with AMD X3D-safe scheduling, Windows Balanced power handling, and Game Bar protection
 - Selectable simulator priority and optional Intel hybrid performance-core CPU Sets
-- Temporary Ultimate Performance power plan and NVIDIA persistence control
+- CPU-aware power handling: Windows Balanced for AMD X3D, temporary Ultimate Performance for other supported CPUs, plus NVIDIA persistence control
+- Automatic post-flight Xbox application and trigger-start service cleanup for MSFS, without changing service startup configuration
 - Standard profile includes DNS flush, High process priority, and vendor-aware CPU Sets; service stopping is reserved for Aggressive mode
-- Aggressive profile adds reversible Game Bar/Game DVR, fullscreen-optimization, timer-resolution, process power-throttling, and multimedia/network tuning
+- Aggressive profile adds reversible Game Bar/Game DVR, fullscreen-optimization, timer-resolution, process power-throttling, standby-memory clearing, and approved service control
 - Optional one-time standby-memory clearing in Aggressive mode
 - Background application and service impact guidance
 - Four-level application and service guidance: Recommended, Optional, Protected, and Unknown; automatic application selection uses only verified Recommended applications
@@ -70,7 +72,7 @@ The panel connects only to `ws://127.0.0.1:48624/dashboard`. The bridge is bound
 - Restoration commands are followed by state verification. Failures are recorded in `%LOCALAPPDATA%\SimVROptimizer\last-restoration-report.json`, and the active journal is retained whenever verification fails.
 - Services are restarted only when they were running before the optimizer stopped them.
 - NVIDIA persistence is restored per GPU to its original value.
-- A temporary Ultimate Performance plan is deleted after the original plan is reactivated.
+- AMD X3D systems retain or temporarily use Windows Balanced for cache-aware CCD scheduling. Other supported CPUs can use a temporary Ultimate Performance plan. Any changed plan is restored afterward.
 - The optimizer tracks a newly created simulator PID. It does not attach to a matching process that was already running.
 - CPU topology is detected through Windows CPU Set APIs, including processor groups on systems with more than 64 logical processors. Intel hybrid tuning uses only unparked, unreserved performance-class CPU Sets, preserves any existing simulator CPU policy, and verifies the assignment. AMD X3D, AMD, uniform-core Intel, and uncertain topologies remain safely managed by the Windows scheduler.
 - Selected applications can be stopped for the session and remain closed after the simulator exits. Services and system settings are restored, while simulator launchers and VR runtimes remain protected.
@@ -94,18 +96,18 @@ Additional simulator configurations may be added in future releases.
 
 ## Optional session adjustments
 
-- Temporary Ultimate Performance power plan
+- CPU-aware power plan: Windows Balanced for AMD X3D; temporary Ultimate Performance for other supported CPUs
 - Selectable `Normal`, `AboveNormal`, or `High` simulator priority
 - Optional Intel hybrid performance-core CPU Sets; AMD and AMD X3D remain scheduler-managed
 - Stop SysMain when it was previously running
 - Stop Print Spooler when it was previously running
 - Enable NVIDIA persistence mode only on GPUs where it was previously disabled
-- Stop selected running applications for the session and restart them when an executable path can be captured
+- Stop selected running applications for the session; OneDrive is restored after the flight while other applications remain closed
 - Stop selected relevant services only when they were running, then restore them afterward
 
-The scan presents an impact level and explanation for each candidate. Manual mode leaves all selections under user control. Automatic mode selects all applications with a reliable restart command and all stoppable services. Items without a reliable restart command remain available for manual selection; Windows download, simulator-launcher, VR-runtime, Xbox Gaming Services, and common flight-control services are protected.
+The scan presents an impact level and explanation for each candidate. Manual mode retains saved choices, while Automatic mode selects verified Recommended applications and approved Aggressive services. Items without reliable classification remain available for manual selection; Windows download, simulator-launcher, VR-runtime, Xbox Gaming Services, and common flight-control services are protected. On AMD X3D systems, detected Process Lasso power controllers are locked selected so they cannot override Windows Balanced.
 
-Standard profile limits Automatic application selection to high- and medium-impact items and uses Ultimate Performance, High simulator priority, vendor-aware CPU Sets, NVIDIA persistence, and a DNS flush. It does not stop services. Aggressive profile includes low- and unknown-impact applications, enables service selection (including approved SysMain, Print Spooler, iCloud and updater candidates), and adds the advanced session tuning shown in the UI. Every profile toggle remains editable before launch.
+Standard profile limits Automatic application selection to high- and medium-impact items and uses CPU-aware power handling, High simulator priority, vendor-aware CPU Sets, NVIDIA persistence, and a DNS flush. AMD X3D systems use Windows Balanced; other supported processors use temporary Ultimate Performance. It does not stop services. Aggressive profile includes low- and unknown-impact applications, enables service selection (including approved SysMain, Print Spooler, iCloud and updater candidates), and adds the advanced session tuning shown in the UI. Every profile toggle remains editable before launch.
 
 **Administrator mode is required for Aggressive operation.** This includes stopping services such as SysMain, Print Spooler, iCloud, CCleaner and updater services. It also includes protected registry changes, timer and memory operations, network tuning, and reliable restoration. If the title bar does not show administrator access, close the app and restart it using **Run as administrator** before beginning an Aggressive session.
 
@@ -161,6 +163,23 @@ The test runner has no third-party test framework dependency. It covers output p
 
 Licensed under the [MIT License](LICENSE).
 
+## Release notes — 2.0.0
+
+- Added the live Windows performance dashboard and movable MSFS 2024 **VR Optimizer** toolbar panel with FPS, frame-time, MainThread, CPU, memory, processor-group/AMD CCD summaries, graphs, independent spike and stutter counters, and reset controls.
+- Added MSFS SimConnect visual-frame telemetry, Intel PresentMon fallback, optional CSV capture, and a loopback-only telemetry bridge for the in-simulator panel.
+- Added the bundled OpenXR Turbo frame-pacing layer with temporary session registration, automatic removal on exit, profile persistence, explanatory tooltips, and toolbar ON/OFF status.
+- Added named user profiles that persist simulator, workflow, VR runtime, optimization options, application/service selections, and custom process lists across rescans, restarts, and administrator handoff.
+- Added Recommended, Optional, Protected, and Unknown classification with colour guidance for applications and services; improved virtualization-safe checkbox persistence.
+- Strengthened recovery with a durable transaction journal, verified per-item restoration report, automatic interrupted-session recovery, log rotation, and recovery shortcuts.
+- Changed post-flight application handling so selected applications remain closed, while OneDrive is explicitly and safely restored to the normal desktop session.
+- Added AMD X3D-aware Windows Balanced handling, post-launch power-plan verification, Process Lasso controller shutdown before plan selection, scheduler-safe CPU behavior, and Xbox Game Bar protection.
+- Added automatic post-flight Xbox process/service cleanup without changing startup configuration, reducing stale Xbox state before the next MSFS launch.
+- Improved Intel hybrid CPU Set selection and verification, processor-group support, process priority, power-throttling restoration, and AMD CCD-aware monitoring.
+- Added graceful SteamVR shutdown so Bluetooth base stations can enter standby, plus safer Pimax, Virtual Desktop, OpenXR, flight-control, security, and simulator-companion protection.
+- Added MSFS 2024 `-FastLaunch`, ten simulator configurations including standalone Korea. IL-2 Series, two optimization profiles, granular controls, five-stage progress, Content Creator Mode, and configurable VR runtime launching.
+- Added a pre-flight safety review, administrator guidance, post-restoration restart requirement, aviation instrument UI refinements, application header copyright, and automatic Version 2.0.0 display.
+- Expanded automated regression validation to 42 passing tests.
+
 ## Release notes — 1.10.1
 
 - Fixed saved user profiles so the selected profile loads reliably, its application and service choices are not overwritten by UI events, and the complete profile catalogue survives administrator/UAC continuation.
@@ -212,7 +231,7 @@ Licensed under the [MIT License](LICENSE).
 
 - Added Standard and Aggressive optimization profiles with granular controls.
 - Reserved all service stopping for Aggressive mode and emphasized its administrator requirement.
-- Added reversible Game Bar/Game DVR, fullscreen, timer-resolution, power-throttling, network, and multimedia tuning.
+- Added reversible Game Bar/Game DVR, fullscreen, timer-resolution, and power-throttling tuning.
 - Added optional standby-memory clearing and DNS cache flushing.
 - Fixed running-service detection on Windows and expanded iCloud, Google updater, CCleaner, SysMain, and Print Spooler coverage.
 - Added `-FastLaunch` for Microsoft Flight Simulator 2024 on Steam and Microsoft Store.

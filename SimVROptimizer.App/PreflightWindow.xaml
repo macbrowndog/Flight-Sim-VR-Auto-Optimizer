@@ -44,15 +44,9 @@
             <TextBlock x:Name="SummaryText" FontFamily="Consolas" FontWeight="Bold" TextWrapping="Wrap" />
         </Border>
 
-        <Grid Grid.Row="3">
-            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-            <CheckBox x:Name="SaveWorkCheck" Content="I HAVE SAVED WORK IN APPLICATIONS SELECTED TO CLOSE"
-                      Checked="SaveWorkCheck_Changed" Unchecked="SaveWorkCheck_Changed"
-                      Foreground="{StaticResource TextBrush}" VerticalAlignment="Center" />
-            <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button Content="CANCEL" Click="Cancel_Click" Background="#233137" Foreground="{StaticResource TextBrush}" />
-                <Button x:Name="ContinueButton" Content="CONTINUE" Click="Continue_Click" Background="{StaticResource AccentBrush}" Margin="0" />
-            </StackPanel>
-        </Grid>
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="CANCEL" Click="Cancel_Click" Background="#233137" Foreground="{StaticResource TextBrush}" />
+            <Button x:Name="ContinueButton" Content="CONTINUE" Click="Continue_Click" Background="{StaticResource AccentBrush}" Margin="0" />
+        </StackPanel>
     </Grid>
 </Window>

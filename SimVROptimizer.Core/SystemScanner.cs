@@ -58,7 +58,17 @@ public sealed class SystemScanner
         ["vrmonitor"] = new(ImpactLevel.Low, "SteamVR Monitor", "VR runtime component; protected from stopping."),
         ["MSFS_AutoFPS"] = new(ImpactLevel.Low, "MSFS AutoFPS", "Simulator performance companion; protected so MSFS can start and use it."),
         ["MSFS2020_AutoFPS"] = new(ImpactLevel.Low, "MSFS 2020 AutoFPS", "Simulator performance companion; protected so MSFS can start and use it."),
-        ["MSFS2024_AutoFPS"] = new(ImpactLevel.Low, "MSFS 2024 AutoFPS", "Simulator performance companion; protected so MSFS can start and use it.")
+        ["MSFS2024_AutoFPS"] = new(ImpactLevel.Low, "MSFS 2024 AutoFPS", "Simulator performance companion; protected so MSFS can start and use it."),
+        ["ProcessLasso"] = new(ImpactLevel.High, "Process Lasso", "Its governor can override the AMD X3D Windows Balanced power plan selected for the flight session."),
+        ["ProcessGovernor"] = new(ImpactLevel.High, "Process Lasso Core Engine", "Its governor can override the AMD X3D Windows Balanced power plan selected for the flight session."),
+        ["CPUBalance"] = new(ImpactLevel.High, "Process Lasso CPUBalance", "It can alter CPU and power-management policy while the simulator is running."),
+        ["ParkControl"] = new(ImpactLevel.High, "Bitsum ParkControl", "It can alter CPU and power-plan behavior while the simulator is running."),
+        ["pia-service"] = new(ImpactLevel.Low, "Private Internet Access VPN Service", "Optional VPN component. Closing it can disconnect the VPN and interrupt simulator online services."),
+        ["pi_server"] = new(ImpactLevel.Low, "Pimax Runtime Server", "Protected Pimax headset runtime component required for VR."),
+        ["pi_vst"] = new(ImpactLevel.Low, "Pimax VR Service Tool", "Protected Pimax headset runtime component required for VR."),
+        ["pi_overlay"] = new(ImpactLevel.Low, "Pimax VR Overlay", "Protected Pimax headset runtime component required for VR."),
+        ["PiPlayService"] = new(ImpactLevel.Low, "Pimax Play Service", "Protected Pimax headset runtime component required for VR."),
+        ["PiPlatformService_64"] = new(ImpactLevel.Low, "Pimax Platform Service", "Protected Pimax headset runtime component required for VR.")
     };
 
     private static readonly Dictionary<string, ImpactProfile> ServiceProfiles = new(StringComparer.OrdinalIgnoreCase)
@@ -103,11 +113,17 @@ public sealed class SystemScanner
     {
         "steam", "steamwebhelper", "VirtualDesktop.Streamer", "vrserver", "vrmonitor", "vrcompositor",
         "OculusClient", "OVRServer_x64", "PimaxClient", "PimaxPlay", "PiTool",
+        "pi_server", "pi_vst", "pi_overlay", "PiPlayService", "PiPlatformService_64",
         "MSFS_AutoFPS", "MSFS2020_AutoFPS", "MSFS2024_AutoFPS"
     };
 
     private readonly ICommandRunner _commands;
-    public SystemScanner(ICommandRunner commands) => _commands = commands;
+    private readonly ICpuProfileProvider _cpuProfileProvider;
+    public SystemScanner(ICommandRunner commands, ICpuProfileProvider? cpuProfileProvider = null)
+    {
+        _commands = commands;
+        _cpuProfileProvider = cpuProfileProvider ?? new CpuOptimizer();
+    }
 
     public async Task<SystemScanResult> ScanAsync(
         IReadOnlyList<CustomApplicationRule>? customApplications = null,
@@ -115,7 +131,10 @@ public sealed class SystemScanner
     {
         var simulatorsTask = DetectSimulatorsAsync(cancellationToken);
         var servicesTask = ScanServicesAsync(cancellationToken);
-        var applications = ScanApplications(customApplications ?? []);
+        CpuProfile? cpuProfile = null;
+        try { cpuProfile = _cpuProfileProvider.GetProfile(); }
+        catch { }
+        var applications = ScanApplications(customApplications ?? [], cpuProfile);
         return new SystemScanResult
         {
             Simulators = await simulatorsTask.ConfigureAwait(false),
@@ -341,17 +360,19 @@ public sealed class SystemScanner
         if (!string.IsNullOrWhiteSpace(directory)) roots.Add(directory);
     }
 
-    private static IReadOnlyList<RunningAppCandidate> ScanApplications(IReadOnlyList<CustomApplicationRule> customApplications)
+    private static IReadOnlyList<RunningAppCandidate> ScanApplications(
+        IReadOnlyList<CustomApplicationRule> customApplications,
+        CpuProfile? cpuProfile)
     {
         var applications = Process.GetProcesses()
             .Where(process => !NeverStopApps.Contains(process.ProcessName))
             .GroupBy(process => process.ProcessName, StringComparer.OrdinalIgnoreCase)
-            .Select(CreateAppCandidate)
+            .Select(group => CreateAppCandidate(group, cpuProfile))
             .Where(candidate => candidate is not null)
             .Cast<RunningAppCandidate>()
             .ToDictionary(candidate => candidate.ProcessName, StringComparer.OrdinalIgnoreCase);
 
-        ApplyCustomApplications(applications, customApplications);
+        ApplyCustomApplications(applications, customApplications, cpuProfile);
         return applications.Values
             .OrderBy(candidate => candidate.Classification)
             .ThenBy(candidate => candidate.Impact)
@@ -361,12 +382,13 @@ public sealed class SystemScanner
 
     private static void ApplyCustomApplications(
         IDictionary<string, RunningAppCandidate> applications,
-        IEnumerable<CustomApplicationRule> rules)
+        IEnumerable<CustomApplicationRule> rules,
+        CpuProfile? cpuProfile)
     {
         foreach (var rule in rules.Where(rule => !string.IsNullOrWhiteSpace(rule.ProcessName)))
         {
             var processName = NormalizeProcessName(rule.ProcessName);
-            if (NeverStopApps.Contains(processName) || IsProtectedApplication(processName)) continue;
+            if (NeverStopApps.Contains(processName) || IsProtectedApplicationForCpu(processName, cpuProfile)) continue;
 
             var processes = Process.GetProcessesByName(processName);
             try
@@ -404,7 +426,7 @@ public sealed class SystemScanner
         }
     }
 
-    private static RunningAppCandidate? CreateAppCandidate(IGrouping<string, Process> group)
+    private static RunningAppCandidate? CreateAppCandidate(IGrouping<string, Process> group, CpuProfile? cpuProfile)
     {
         var processes = group.ToArray();
         try
@@ -423,8 +445,10 @@ public sealed class SystemScanner
                 .Select(process => TryGet(() => process.MainWindowTitle, ""))
                 .FirstOrDefault(title => !string.IsNullOrWhiteSpace(title));
             var restartCommand = ResolveRestartCommand(group.Key, path);
-            var canStop = !IsProtectedApplication(group.Key);
+            var canStop = !IsProtectedApplicationForCpu(group.Key, cpuProfile);
             var classification = ApplicationClassifier.Classify(group.Key, profile is not null, canStop, false, restartCommand);
+            var selectionRequired = cpuProfile is { IsAmd: true, IsX3D: true }
+                && ApplicationClassifier.IsPowerPlanController(group.Key);
             return new RunningAppCandidate
             {
                 ProcessName = group.Key,
@@ -436,6 +460,7 @@ public sealed class SystemScanner
                 ExecutablePath = path,
                 RestartCommand = restartCommand,
                 CanStop = canStop,
+                SelectionRequired = selectionRequired,
                 Classification = classification.Classification,
                 ClassificationReason = classification.Reason
             };
@@ -526,9 +551,11 @@ public sealed class SystemScanner
             || name.Contains("Logitech", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool IsProtectedApplication(string name)
+    private static bool IsProtectedApplication(string name) => IsProtectedApplicationForCpu(name, null);
+
+    private static bool IsProtectedApplicationForCpu(string name, CpuProfile? cpuProfile)
     {
-        if (ProtectedApps.Contains(name)) return true;
+        if (ProtectedApps.Contains(name) || CpuProtectionPolicy.IsXboxGameBarProtected(cpuProfile, name)) return true;
         return name.Contains("GamingServices", StringComparison.OrdinalIgnoreCase)
             || name.Contains("GameInput", StringComparison.OrdinalIgnoreCase)
             || name.Contains("TextInput", StringComparison.OrdinalIgnoreCase)
@@ -544,8 +571,6 @@ public sealed class SystemScanner
             || name.Contains("Simlink", StringComparison.OrdinalIgnoreCase)
             || name.Contains("MOZA", StringComparison.OrdinalIgnoreCase)
             || name.Contains("SimRacingStudio", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("pia-service", StringComparison.OrdinalIgnoreCase)
-            || name.Contains("PrivateInternetAccess", StringComparison.OrdinalIgnoreCase)
             || name.Contains("FSUIPC", StringComparison.OrdinalIgnoreCase)
             || name.Contains("TrackIR", StringComparison.OrdinalIgnoreCase)
             || name.Contains("AutoFPS", StringComparison.OrdinalIgnoreCase);

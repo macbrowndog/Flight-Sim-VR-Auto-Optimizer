@@ -26,13 +26,13 @@ public sealed class OptimizerOptions
     public bool UseUltimatePowerPlan { get; set; } = true;
     public bool EnableNvidiaPersistence { get; set; }
     public bool UseMsfs2024FastLaunch { get; set; } = true;
+    public bool UseOpenXrTurboMode { get; set; }
     public bool FlushDnsCache { get; set; } = true;
     public bool DisableGameDvr { get; set; }
     public bool ClearStandbyMemory { get; set; }
     public bool UseHighResolutionTimer { get; set; }
     public bool DisableFullscreenOptimizations { get; set; }
     public bool DisablePowerThrottling { get; set; }
-    public bool ApplyNetworkMemoryOptimizations { get; set; }
     public ProcessPriorityPreference ProcessPriority { get; set; } = ProcessPriorityPreference.AboveNormal;
     public bool UseVendorAwareCpuSets { get; set; }
     public bool ContentCreatorMode { get; set; }
@@ -161,6 +161,15 @@ public enum WorkloadClassification
 
 public sealed record WorkloadClassificationResult(WorkloadClassification Classification, string Reason);
 
+public static class CpuProtectionPolicy
+{
+    public static bool IsXboxGameBarProtected(CpuProfile? profile, string processName) =>
+        profile is { IsAmd: true, IsX3D: true }
+        && (processName.Equals("GameBar", StringComparison.OrdinalIgnoreCase)
+            || processName.Equals("XboxGameBar", StringComparison.OrdinalIgnoreCase)
+            || processName.StartsWith("XboxGameBar", StringComparison.OrdinalIgnoreCase));
+}
+
 public sealed class DetectedSimulator
 {
     public required SimulatorDefinition Definition { get; init; }
@@ -181,6 +190,8 @@ public sealed class RunningAppCandidate : INotifyPropertyChanged
     public string? ExecutablePath { get; init; }
     public required string RestartCommand { get; init; }
     public required bool CanStop { get; init; }
+    public bool SelectionRequired { get; init; }
+    public bool CanChangeSelection => CanStop && !SelectionRequired;
     public bool IsCustom { get; init; }
     public WorkloadClassification Classification { get; init; } = WorkloadClassification.Unknown;
     public string ClassificationReason { get; init; } = "Not yet classified.";
@@ -232,10 +243,11 @@ public static class SessionSelectionPolicy
         OptimizationProfile profile = OptimizationProfile.Standard)
     {
         foreach (var application in applications)
-            application.Selected = application.CanStop
-                && application.RestartSupport == "Automatic"
-                && application.Classification == WorkloadClassification.Recommended
-                && !(contentCreatorMode && IsContentCreatorApplication(application));
+            application.Selected = application.SelectionRequired
+                || (application.CanStop
+                    && application.RestartSupport == "Automatic"
+                    && application.Classification == WorkloadClassification.Recommended
+                    && !(contentCreatorMode && IsContentCreatorApplication(application)));
         foreach (var service in services)
             service.Selected = profile == OptimizationProfile.Aggressive
                 && service.CanStop
@@ -254,7 +266,7 @@ public static class SessionSelectionPolicy
         IEnumerable<RunningAppCandidate> applications,
         IEnumerable<ServiceCandidate> services)
     {
-        foreach (var application in applications) application.Selected = false;
+        foreach (var application in applications) application.Selected = application.SelectionRequired;
         foreach (var service in services) service.Selected = false;
     }
 
@@ -268,6 +280,11 @@ public static class SessionSelectionPolicy
     {
         foreach (var application in applications)
         {
+            if (application.SelectionRequired)
+            {
+                application.Selected = true;
+                continue;
+            }
             if (TryGetSelection(applicationSelections, application.ProcessName, out var selected))
                 application.Selected = selected
                     && application.CanStop

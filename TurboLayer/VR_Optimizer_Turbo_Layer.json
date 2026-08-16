@@ -1,0 +1,10 @@
+{
+  "file_format_version": "1.0.0",
+  "api_layer": {
+    "name": "XR_APILAYER_FLIGHTDECKTOOLS_turbo",
+    "library_path": ".\\VR_Optimizer_Turbo_Layer.dll",
+    "api_version": "1.0",
+    "implementation_version": "1",
+    "description": "VR Auto-Optimizer optional asynchronous frame-pacing layer"
+  }
+}

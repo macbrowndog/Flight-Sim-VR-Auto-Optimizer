@@ -66,6 +66,7 @@ class IngamePanelFlightDeckToolsDashboard extends TemplateElement {
   connectionLost() {
     this.socket = null;
     this.setLinkState(false, "OFFLINE");
+    this.renderTurboMode(false);
     this.setText("source-status", "START VR AUTO-OPTIMIZER TO ENABLE LIVE DATA");
     if (!this.reconnectTimer)
       this.reconnectTimer = setTimeout(() => {
@@ -93,6 +94,7 @@ class IngamePanelFlightDeckToolsDashboard extends TemplateElement {
     catch (_) { return; }
 
     this.setText("source-status", (frame.sessionActive ? "LIVE — " : "STANDBY — ") + (frame.status || "Optimizer ready"));
+    this.renderTurboMode(frame.openXrTurboMode === true);
     const sample = frame.sample;
     if (sample) {
       this.setMetric("fps", sample.fps, 1);
@@ -136,6 +138,15 @@ class IngamePanelFlightDeckToolsDashboard extends TemplateElement {
   resetSpikes() {
     this.counterBaseline.spikes = this.serverSpikes;
     this.renderCounter("spike-alert", "spike-card", "CPU SPIKE SAMPLES", 0);
+  }
+
+  renderTurboMode(enabled) {
+    this.setText("turbo-state", "OPENXR TURBO MODE: " + (enabled ? "ON" : "OFF"));
+    const state = document.getElementById("turbo-state");
+    if (state) {
+      state.classList.toggle("on", enabled);
+      state.classList.toggle("off", !enabled);
+    }
   }
 
   renderCounter(textId, cardId, label, count) {

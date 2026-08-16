@@ -8,8 +8,16 @@ public static class ApplicationClassifier
         "LenovoVantage", "OneDrive", "Dropbox", "GoogleDriveFS", "Creative Cloud", "CCXProcess",
         "CCleaner", "CCleaner64", "GoogleUpdater", "GoogleCrashHandler", "GoogleCrashHandler64",
         "iCloudDrive", "iCloudServices", "ApplePhotoStreams", "APSDaemon", "mDNSResponder",
-        "AppleMobileDeviceService", "iPodService", "iTunesHelper", "CrossDeviceService"
+        "AppleMobileDeviceService", "iPodService", "iTunesHelper", "CrossDeviceService",
+        "ProcessLasso", "ProcessGovernor", "CPUBalance", "ParkControl"
     };
+
+    public static bool IsPowerPlanController(string processName) =>
+        processName.Equals("ProcessLasso", StringComparison.OrdinalIgnoreCase)
+        || processName.Equals("ProcessGovernor", StringComparison.OrdinalIgnoreCase)
+        || processName.Equals("CPUBalance", StringComparison.OrdinalIgnoreCase)
+        || processName.Equals("ParkControl", StringComparison.OrdinalIgnoreCase)
+        || processName.Contains("Process Lasso", StringComparison.OrdinalIgnoreCase);
 
     public static WorkloadClassificationResult Classify(
         string processName,
