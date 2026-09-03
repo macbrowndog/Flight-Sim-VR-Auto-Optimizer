@@ -14,6 +14,11 @@ public static partial class OutputParsers
     public static bool IsServiceRunning(string output) =>
         Regex.IsMatch(output, @"(?im)STATE\s*:\s*4\s+RUNNING");
 
+    public static bool IsServiceStoppedCleanly(string output) =>
+        Regex.IsMatch(output, @"(?im)STATE\s*:\s*1\s+STOPPED")
+        && Regex.IsMatch(output, @"(?im)WIN32_EXIT_CODE\s*:\s*0(?:\s|$)")
+        && Regex.IsMatch(output, @"(?im)SERVICE_EXIT_CODE\s*:\s*0(?:\s|$)");
+
     public static IReadOnlyDictionary<string, bool> ParseNvidiaPersistence(string output)
     {
         var result = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);

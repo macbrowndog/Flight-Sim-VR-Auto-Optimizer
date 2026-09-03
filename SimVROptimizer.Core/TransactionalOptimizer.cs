@@ -313,7 +313,9 @@ public sealed class TransactionalOptimizer
 
     private async Task StopApplicationAsync(RunningAppCandidate application, bool dryRun, CancellationToken cancellationToken)
     {
-        var recoveryDescription = IsOneDrive(application.ProcessName)
+        var restartAfterFlight = IsOneDrive(application.ProcessName)
+            || application.AfterFlightAction == ApplicationAfterFlightAction.Restart;
+        var recoveryDescription = restartAfterFlight
             ? "restart after the flight"
             : "remain closed after the flight";
         await ReportAsync($"Application {application.DisplayName}: would stop for this session and {recoveryDescription}.", cancellationToken);
@@ -321,7 +323,8 @@ public sealed class TransactionalOptimizer
 
         var processes = Process.GetProcessesByName(application.ProcessName);
         if (processes.Length == 0) return;
-        await RecordAsync(new StateMutation(MutationKind.Process, application.ProcessName, application.RestartCommand, "stopped", DateTimeOffset.UtcNow), cancellationToken);
+        var appliedValue = restartAfterFlight ? "stopped:restart" : "stopped:left-closed";
+        await RecordAsync(new StateMutation(MutationKind.Process, application.ProcessName, application.RestartCommand, appliedValue, DateTimeOffset.UtcNow), cancellationToken);
 
         foreach (var process in processes)
         {
@@ -363,13 +366,22 @@ public sealed class TransactionalOptimizer
             case MutationKind.Service when mutation.OriginalValue == "running":
                 var service = await _commands.RunAsync("sc.exe", ["query", mutation.Target], cancellationToken).ConfigureAwait(false);
                 if (!service.Succeeded) throw new InvalidOperationException($"Could not query service {mutation.Target} during restoration.");
+                var startRequested = false;
                 if (!OutputParsers.IsServiceRunning(service.StandardOutput))
+                {
                     await RequiredCommandAsync("sc.exe", ["start", mutation.Target], cancellationToken).ConfigureAwait(false);
+                    startRequested = true;
+                }
                 for (var attempt = 0; attempt < 15; attempt++)
                 {
                     var serviceAfterStart = await _commands.RunAsync("sc.exe", ["query", mutation.Target], cancellationToken).ConfigureAwait(false);
                     if (serviceAfterStart.Succeeded && OutputParsers.IsServiceRunning(serviceAfterStart.StandardOutput))
                         return Restored(mutation, "Service running state is verified.");
+                    if (startRequested
+                        && ServiceRestorationPolicy.MayStopWhenIdle(mutation.Target)
+                        && serviceAfterStart.Succeeded
+                        && OutputParsers.IsServiceStoppedCleanly(serviceAfterStart.StandardOutput))
+                        return Restored(mutation, "Service accepted the restart request and then stopped normally; this updater service may self-terminate when idle.");
                     await Task.Delay(1000, cancellationToken).ConfigureAwait(false);
                 }
                 throw new InvalidOperationException($"Service {mutation.Target} is not running 15 seconds after the restart request.");
@@ -384,12 +396,12 @@ public sealed class TransactionalOptimizer
             case MutationKind.Process:
                 if (_applicationRestarter.IsRunning(mutation.Target))
                     return Restored(mutation, "Application is already running.");
-                if (IsOneDrive(mutation.Target))
+                if (ShouldRestartApplication(mutation))
                 {
-                    await ReportAsync("Restoring Microsoft OneDrive...", cancellationToken).ConfigureAwait(false);
+                    await ReportAsync($"Restarting {mutation.Target} after the flight...", cancellationToken).ConfigureAwait(false);
                     if (!await _applicationRestarter.RestartAndVerifyAsync(mutation.Target, mutation.OriginalValue, cancellationToken).ConfigureAwait(false))
-                        throw new InvalidOperationException("Microsoft OneDrive did not restart within 15 seconds.");
-                    return Restored(mutation, "Microsoft OneDrive was restarted and its running state is verified.");
+                        throw new InvalidOperationException($"{mutation.Target} did not restart within 15 seconds.");
+                    return Restored(mutation, "Application was restarted and its running state is verified.");
                 }
                 return new(mutation.Kind, mutation.Target, RestorationOutcome.LeftClosed,
                     "Application was intentionally left closed after the flight and was not relaunched.");
@@ -408,6 +420,22 @@ public sealed class TransactionalOptimizer
 
     private static bool IsOneDrive(string processName) =>
         string.Equals(processName, "OneDrive", StringComparison.OrdinalIgnoreCase);
+
+    private static bool ShouldRestartApplication(StateMutation mutation) =>
+        IsOneDrive(mutation.Target)
+        || mutation.AppliedValue.Equals("stopped:restart", StringComparison.OrdinalIgnoreCase);
+
+    public static class ServiceRestorationPolicy
+    {
+        public static bool MayStopWhenIdle(string serviceName) =>
+            serviceName.Equals("edgeupdate", StringComparison.OrdinalIgnoreCase)
+            || serviceName.Equals("edgeupdatem", StringComparison.OrdinalIgnoreCase)
+            || serviceName.Equals("gupdate", StringComparison.OrdinalIgnoreCase)
+            || serviceName.Equals("gupdatem", StringComparison.OrdinalIgnoreCase)
+            || serviceName.Equals("GoogleChromeElevationService", StringComparison.OrdinalIgnoreCase)
+            || serviceName.Equals("MozillaMaintenance", StringComparison.OrdinalIgnoreCase)
+            || serviceName.StartsWith("GoogleUpdater", StringComparison.OrdinalIgnoreCase);
+    }
 
     private async Task FlushDnsCacheAsync(bool dryRun, CancellationToken cancellationToken)
     {

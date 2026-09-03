@@ -11,6 +11,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("AMD X3D Balanced power policy", TestAmdX3dBalancedPowerPlanAsync),
     ("AMD X3D Xbox Game Bar protection", TestAmdX3dGameBarProtectionAsync),
     ("Service state parser", TestServiceParserAsync),
+    ("Transient updater service restoration", TestTransientUpdaterServiceRestorationAsync),
     ("NVIDIA state parser", TestNvidiaParserAsync),
     ("Running service parser", TestRunningServiceParserAsync),
     ("Impact service scan", TestImpactServiceScanAsync),
@@ -25,6 +26,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Application classification", TestApplicationClassificationAsync),
     ("Service classification", TestServiceClassificationAsync),
     ("Selection state notification", TestSelectionStateNotificationAsync),
+    ("Application after-flight choices", TestApplicationAfterFlightChoicesAsync),
     ("Saved selection preferences", TestSavedSelectionPreferencesAsync),
     ("Named user profiles", TestNamedUserProfilesAsync),
     ("Profiles survive administrator continuation", TestProfilesSurviveContinuationAsync),
@@ -47,6 +49,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Transactional restore", TestTransactionalRestoreAsync),
     ("Failed restore verification retains journal", TestRestoreVerificationFailureAsync),
     ("Applications remain closed after restore", TestApplicationLeftClosedAsync),
+    ("Selected applications restart after restore", TestApplicationRestartedAsync),
     ("OneDrive is restored after flight", TestOneDriveRestoredAsync),
     ("Corrupt recovery journal is retained", TestCorruptJournalAsync)
 };
@@ -129,7 +132,33 @@ static Task TestServiceParserAsync()
 {
     True(OutputParsers.IsServiceRunning("STATE              : 4  RUNNING"));
     True(!OutputParsers.IsServiceRunning("STATE              : 1  STOPPED"));
+    True(OutputParsers.IsServiceStoppedCleanly("STATE : 1 STOPPED\nWIN32_EXIT_CODE : 0 (0x0)\nSERVICE_EXIT_CODE : 0 (0x0)"));
+    True(!OutputParsers.IsServiceStoppedCleanly("STATE : 1 STOPPED\nWIN32_EXIT_CODE : 1067\nSERVICE_EXIT_CODE : 0"));
     return Task.CompletedTask;
+}
+
+static async Task TestTransientUpdaterServiceRestorationAsync()
+{
+    var fixture = CreateFixture();
+    var journal = new SessionJournal
+    {
+        SimulatorName = "Test Sim",
+        Mutations =
+        [
+            new StateMutation(MutationKind.Service, "edgeupdate", "running", "stopped", DateTimeOffset.UtcNow)
+        ]
+    };
+    await JsonStore.SaveAtomicAsync(fixture.Paths.JournalFile, journal);
+    fixture.Commands.Handler = (file, args) => file == "sc.exe" && args.FirstOrDefault() == "query"
+        ? Ok("STATE : 1 STOPPED\nWIN32_EXIT_CODE : 0 (0x0)\nSERVICE_EXIT_CODE : 0 (0x0)")
+        : Ok();
+
+    var report = await fixture.Optimizer.RestoreAsync();
+
+    True(report.Succeeded);
+    Equal(1, report.RestoredCount);
+    True(!File.Exists(fixture.Paths.JournalFile));
+    True(fixture.Commands.Calls.Any(call => call.File == "sc.exe" && string.Join(" ", call.Args) == "start edgeupdate"));
 }
 
 static Task TestNvidiaParserAsync()
@@ -198,6 +227,10 @@ static Task TestPackagedApplicationRestartSafetyAsync()
         ?? throw new InvalidOperationException("Restart resolver was not found.");
     Equal("none:", (string?)resolver.Invoke(null, ["Widgets", @"C:\Program Files\WindowsApps\MicrosoftWindows.Client.WebExperience_1.0_x64__cw5n1h2txyewy\Widgets.exe"]));
     Equal(@"shell:shell:AppsFolder\Microsoft.YourPhone_8wekyb3d8bbwe!App", (string?)resolver.Invoke(null, ["PhoneExperienceHost", @"C:\Program Files\WindowsApps\Microsoft.YourPhone_1.0_x64__8wekyb3d8bbwe\PhoneExperienceHost.exe"]));
+
+    var launchResolver = typeof(ApplicationRestarter).GetMethod("ResolveLaunchTarget", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+        ?? throw new InvalidOperationException("Application launch target resolver was not found.");
+    Equal(@"shell:AppsFolder\Microsoft.YourPhone_8wekyb3d8bbwe!App", (string?)launchResolver.Invoke(null, ["PhoneExperienceHost", @"shell:shell:AppsFolder\Microsoft.YourPhone_8wekyb3d8bbwe!App"]));
     return Task.CompletedTask;
 }
 
@@ -633,7 +666,11 @@ static async Task TestNamedUserProfilesAsync()
         },
         CustomApplications = [new CustomApplicationRule { ProcessName = "ExampleTool", RestartExecutablePath = @"C:\Tools\ExampleTool.exe" }],
         ApplicationSelections = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["OneDrive"] = true },
-        ServiceSelections = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["SysMain"] = true }
+        ServiceSelections = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["SysMain"] = true },
+        ApplicationAfterFlightActions = new Dictionary<string, ApplicationAfterFlightAction>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["ExampleTool"] = ApplicationAfterFlightAction.Restart
+        }
     };
 
     var saved = UserProfileStore.SaveOrReplace(config, "MSFS VR");
@@ -644,6 +681,7 @@ static async Task TestNamedUserProfilesAsync()
     config.CustomApplications[0].ProcessName = "Changed";
     Equal(OptimizationProfile.Aggressive, saved.Options.Profile);
     Equal(true, saved.ApplicationSelections["onedrive"]);
+    Equal(ApplicationAfterFlightAction.Restart, saved.ApplicationAfterFlightActions["exampletool"]);
     Equal("ExampleTool", saved.CustomApplications[0].ProcessName);
 
     True(UserProfileStore.TryApply(config, "msfs vr"));
@@ -653,6 +691,7 @@ static async Task TestNamedUserProfilesAsync()
     Equal(VrRuntimePreference.PimaxPlay, config.Options.VrRuntime);
     True(config.Options.UseOpenXrTurboMode);
     Equal(true, config.ServiceSelections["sysmain"]);
+    Equal(ApplicationAfterFlightAction.Restart, config.ApplicationAfterFlightActions["exampletool"]);
 
     config.Options.LaunchTimeoutSeconds = 300;
     UserProfileStore.SaveOrReplace(config, "MSFS VR");
@@ -666,6 +705,7 @@ static async Task TestNamedUserProfilesAsync()
     Equal("MSFS VR", loaded.ActiveSavedProfileName);
     Equal(1, loaded.SavedProfiles.Count);
     Equal(true, loaded.SavedProfiles[0].ApplicationSelections["onedrive"]);
+    Equal(ApplicationAfterFlightAction.Restart, loaded.SavedProfiles[0].ApplicationAfterFlightActions["exampletool"]);
     True(UserProfileStore.Delete(loaded, "MSFS VR"));
     Equal(0, loaded.SavedProfiles.Count);
     Equal<string?>(null, loaded.ActiveSavedProfileName);
@@ -679,6 +719,10 @@ static Task TestProfilesSurviveContinuationAsync()
         ActiveSavedProfileName = "MSFS VR",
         ApplicationSelections = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["OneDrive"] = true },
         ServiceSelections = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { ["SysMain"] = true },
+        ApplicationAfterFlightActions = new Dictionary<string, ApplicationAfterFlightAction>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["ExampleTool"] = ApplicationAfterFlightAction.LeaveClosed
+        },
         SavedProfiles =
         [
             new SavedUserProfile
@@ -695,7 +739,11 @@ static Task TestProfilesSurviveContinuationAsync()
         SimulatorId = "msfs2024-store",
         SessionMode = SessionMode.Manual,
         Options = new OptimizerOptions { Profile = OptimizationProfile.Standard },
-        CustomApplications = []
+        CustomApplications = [],
+        ApplicationAfterFlightActions = new Dictionary<string, ApplicationAfterFlightAction>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["ExampleTool"] = ApplicationAfterFlightAction.Restart
+        }
     };
 
     var continued = UserProfileStore.CreateContinuedConfig(current, pending);
@@ -703,10 +751,51 @@ static Task TestProfilesSurviveContinuationAsync()
     Equal(1, continued.SavedProfiles.Count);
     Equal(true, continued.ApplicationSelections["onedrive"]);
     Equal(true, continued.ServiceSelections["sysmain"]);
+    Equal(ApplicationAfterFlightAction.Restart, continued.ApplicationAfterFlightActions["exampletool"]);
     Equal(OptimizationProfile.Standard, continued.Options.Profile);
 
     current.SavedProfiles[0].Name = "Changed";
     Equal("MSFS VR", continued.SavedProfiles[0].Name);
+    return Task.CompletedTask;
+}
+
+static Task TestApplicationAfterFlightChoicesAsync()
+{
+    var restartable = new RunningAppCandidate
+    {
+        ProcessName = "Example", DisplayName = "Example", Impact = ImpactLevel.Low,
+        Reason = "Test", InstanceCount = 1, MemoryMb = 1, RestartCommand = @"exe:C:\Tools\Example.exe", CanStop = true
+    };
+    restartable.AfterFlightAction = ApplicationAfterFlightAction.Restart;
+    Equal(ApplicationAfterFlightAction.Restart, restartable.AfterFlightAction);
+    Equal("Restart", restartable.PostFlightState);
+    True(restartable.CanChangeAfterFlight);
+    Equal("RESTART", restartable.AfterFlightChoices.Single(choice => choice.Action == ApplicationAfterFlightAction.Restart).ToString());
+    Equal(ApplicationAfterFlightAction.Restart, restartable.SelectedAfterFlightChoice.Action);
+
+    var manual = new RunningAppCandidate
+    {
+        ProcessName = "Manual", DisplayName = "Manual", Impact = ImpactLevel.Low,
+        Reason = "Test", InstanceCount = 1, MemoryMb = 1, RestartCommand = "none:", CanStop = true
+    };
+    manual.AfterFlightAction = ApplicationAfterFlightAction.Restart;
+    Equal(ApplicationAfterFlightAction.LeaveClosed, manual.AfterFlightAction);
+    True(!manual.CanChangeAfterFlight);
+
+    var oneDrive = new RunningAppCandidate
+    {
+        ProcessName = "OneDrive", DisplayName = "Microsoft OneDrive", Impact = ImpactLevel.Medium,
+        Reason = "Test", InstanceCount = 1, MemoryMb = 1, RestartCommand = @"exe:C:\OneDrive.exe", CanStop = true
+    };
+    Equal(ApplicationAfterFlightAction.Restart, oneDrive.AfterFlightAction);
+    True(!oneDrive.CanChangeAfterFlight);
+
+    restartable.AfterFlightAction = ApplicationAfterFlightAction.LeaveClosed;
+    var config = new AppConfig();
+    var changed = ApplicationAfterFlightPolicy.ApplySelection(config, restartable, ApplicationAfterFlightAction.Restart);
+    True(changed);
+    Equal(ApplicationAfterFlightAction.Restart, restartable.AfterFlightAction);
+    Equal(ApplicationAfterFlightAction.Restart, config.ApplicationAfterFlightActions["Example"]);
     return Task.CompletedTask;
 }
 
@@ -876,7 +965,11 @@ static async Task TestPendingLaunchRoundtripAsync()
         Options = new OptimizerOptions { DryRun = false, Profile = OptimizationProfile.Aggressive, ProcessPriority = ProcessPriorityPreference.High, ContentCreatorMode = true, VrRuntime = VrRuntimePreference.SteamVR },
         ProcessNames = ["OneDrive"],
         ServiceNames = ["GoogleUpdaterService"],
-        CustomApplications = [new CustomApplicationRule { ProcessName = "CustomTool", RestartExecutablePath = @"C:\\Tools\\CustomTool.exe" }]
+        CustomApplications = [new CustomApplicationRule { ProcessName = "CustomTool", RestartExecutablePath = @"C:\\Tools\\CustomTool.exe" }],
+        ApplicationAfterFlightActions = new Dictionary<string, ApplicationAfterFlightAction>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["CustomTool"] = ApplicationAfterFlightAction.Restart
+        }
     };
     await JsonStore.SaveAtomicAsync(file, pending);
     var loaded = await JsonStore.LoadRequiredAsync<PendingLaunch>(file);
@@ -887,6 +980,7 @@ static async Task TestPendingLaunchRoundtripAsync()
     True(loaded.Options.ContentCreatorMode);
     Equal("OneDrive", loaded.ProcessNames.Single());
     Equal("CustomTool", loaded.CustomApplications.Single().ProcessName);
+    Equal(ApplicationAfterFlightAction.Restart, loaded.ApplicationAfterFlightActions["customtool"]);
 }
 
 static async Task TestDryRunAsync()
@@ -1007,6 +1101,30 @@ static async Task TestApplicationLeftClosedAsync()
     Equal(1, report.LeftClosedCount);
     Equal(RestorationOutcome.LeftClosed, report.Items.Single().Outcome);
     True(!File.Exists(fixture.Paths.JournalFile));
+}
+
+static async Task TestApplicationRestartedAsync()
+{
+    var restarter = new FakeApplicationRestarter { Result = true };
+    var fixture = CreateFixture(restarter);
+    var processName = "RestartAfterFlight";
+    var journal = new SessionJournal
+    {
+        SimulatorName = "Test Sim",
+        Mutations =
+        [
+            new StateMutation(MutationKind.Process, processName, @"exe:C:\Tools\RestartAfterFlight.exe", "stopped:restart", DateTimeOffset.UtcNow)
+        ]
+    };
+    await JsonStore.SaveAtomicAsync(fixture.Paths.JournalFile, journal);
+
+    var report = await fixture.Optimizer.RestoreAsync();
+
+    True(report.Succeeded);
+    Equal(1, report.RestoredCount);
+    Equal(0, report.LeftClosedCount);
+    Equal(processName, restarter.ProcessName);
+    Equal(@"exe:C:\Tools\RestartAfterFlight.exe", restarter.RestartCommand);
 }
 
 static async Task TestOneDriveRestoredAsync()

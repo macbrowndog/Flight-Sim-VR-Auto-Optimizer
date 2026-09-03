@@ -3,6 +3,7 @@ namespace SimVROptimizer.Core;
 public enum PreflightStatus
 {
     Ready,
+    Action,
     Warning,
     Blocked
 }

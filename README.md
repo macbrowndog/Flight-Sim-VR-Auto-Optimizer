@@ -23,7 +23,8 @@ It scans the local PC, explains the likely MSFS impact of running applications a
 - Movable MSFS 2024 in-simulator VR toolbar dashboard with the same live metrics, graphs, AMD CCD0/CCD1 load summaries, and spike/stutter counters over a loopback-only read-only connection
 - Persistent custom process kill rules; applications stopped for a flight remain closed during restoration
 - In-app custom-list instructions and non-saving examples for process names and optional restart paths
-- Automatic service and system-setting restoration through a transaction journal; OneDrive is restored while other selected applications intentionally remain closed
+- Automatic service and system-setting restoration through a transaction journal; each selected application can be set to **Leave Closed** or **Restart**, while OneDrive is always restored
+- After a completed flight, selecting **Close Report** closes the restoration report and VR Auto-Optimizer after final cleanup; manually opened reports remain report-only
 - Verified per-item restoration report for applications, services, power plans, NVIDIA state, and registry values
 - Desktop “Restore Last Session” shortcut plus automatic recovery launch after the next Windows sign-in when a journal is active
 - CPU vendor/model and topology detection with AMD X3D-safe scheduling, Windows Balanced power handling, and Game Bar protection
@@ -63,8 +64,8 @@ The panel connects only to `ws://127.0.0.1:48624/dashboard`. The bridge is bound
 
 ## Safety model
 
-- Before optimization, the pre-flight checklist blocks missing simulator or VR launchers, unfinished recovery, protected-component selection, and profile/selection conflicts. Warnings require review and saved-work acknowledgement.
-- Starting a session performs the selected real optimization after confirmation and administrator approval.
+- Before optimization, one combined confirmation lists the safety findings and planned simulator, application, service, runtime, and tuning actions. It blocks missing simulator or VR launchers, unfinished recovery, protected-component selection, and profile/selection conflicts.
+- Starting a session performs the selected real optimization after that confirmation and administrator approval.
 - Real sessions write `%LOCALAPPDATA%\SimVROptimizer\active-session.json` before changing state.
 - Every session uses a `finally` restoration path.
 - An interrupted session is detected on the next start and must be restored before another session can begin.
@@ -102,7 +103,7 @@ Additional simulator configurations may be added in future releases.
 - Stop SysMain when it was previously running
 - Stop Print Spooler when it was previously running
 - Enable NVIDIA persistence mode only on GPUs where it was previously disabled
-- Stop selected running applications for the session; OneDrive is restored after the flight while other applications remain closed
+- Stop selected running applications for the session; choose **Leave Closed** or **Restart** for each restartable application, while OneDrive is always restored
 - Stop selected relevant services only when they were running, then restore them afterward
 
 The scan presents an impact level and explanation for each candidate. Manual mode retains saved choices, while Automatic mode selects verified Recommended applications and approved Aggressive services. Items without reliable classification remain available for manual selection; Windows download, simulator-launcher, VR-runtime, Xbox Gaming Services, and common flight-control services are protected. On AMD X3D systems, detected Process Lasso power controllers are locked selected so they cannot override Windows Balanced.
@@ -119,7 +120,7 @@ The Custom Apps tab stores process names in `config.json`. Optional restart entr
 
 ### Saved user profiles
 
-The Flight Profile tab can store multiple named setups. Configure the simulator, workflow, optimization options, application and service checkboxes, VR runtime, and custom app lists; type a name in **Saved User Profile**, then select **Save Current**. Choose that name and select **Load** on a later run to restore the complete setup and rescan the PC. Saving with an existing name updates that profile. Deleting a profile does not alter the current on-screen settings. The most recently loaded or saved profile name and its active settings are retained when the application is restarted.
+The Flight Profile tab can store multiple named setups. Configure the simulator, workflow, optimization options, application/service checkboxes, application **After Flight** actions, VR runtime, and custom app lists; type a name in **Saved User Profile**, then select **Save Changes**. Choose that name and select **Load** on a later run to restore the complete setup and rescan the PC. The profile status clearly reports **Saved** or **Modified**, and **Revert** discards unsaved changes. Saving with an existing name updates that profile. Deleting a profile does not alter the current on-screen settings. The most recently loaded or saved profile name and its active settings are retained when the application is restarted.
 
 Content Creator Mode can be enabled in Session options. In Automatic mode it keeps OBS, Streamlabs, Twitch Studio, Discord, Stream Deck, NVIDIA Broadcast, Voicemeeter, Elgato, XSplit, vMix, TikTok LIVE Studio, Meld Studio, NDI, Blackmagic, AJA, and matching helper services running. Manual mode remains fully user-controlled.
 
@@ -162,6 +163,19 @@ The test runner has no third-party test framework dependency. It covers output p
 ## License
 
 Licensed under the [MIT License](LICENSE).
+
+## Release notes — 2.1.0
+
+- Added a per-application **After Flight** choice so selected applications can either **Restart** or remain **Left Closed**; OneDrive continues to be restored automatically.
+- Added reliable restart handling for conventional desktop applications and packaged Windows applications such as Phone Link and Cross Device Experience.
+- Added fixed **Restore** status to the Services tab, making it clear that stopped services are always restored after the flight for system safety.
+- Improved named profile editing with **Saved**, **Modified**, and **New** states plus explicit **Save Changes** and **Revert** controls; application and service choices remain persistent through rescans and administrator handoff.
+- Combined the separate launch warnings into one concise pre-flight confirmation showing the applications, services, runtime actions, and system changes planned for the session.
+- Changed **Close Report** after a successfully completed flight to close VR Auto-Optimizer after final cleanup; manually opened reports and incomplete recovery reports leave the optimizer running.
+- Fixed the After Flight dropdown display and conversion error in the Applications grid.
+- Fixed cleanly self-stopping updater services, including Microsoft Edge and Google/Mozilla updater services, being incorrectly reported as failed and retaining the recovery journal.
+- Strengthened restart verification, recovery-journal recording, and regression coverage for per-application choices, profiles, packaged-app launching, transient services, and post-flight shutdown.
+- Expanded automated validation to 45 passing tests.
 
 ## Release notes — 2.0.0
 

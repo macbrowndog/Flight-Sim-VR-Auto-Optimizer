@@ -6,10 +6,13 @@ namespace SimVROptimizer.App;
 
 public partial class PreflightWindow : Window
 {
-    public PreflightWindow(PreflightReport report)
+    public PreflightWindow(PreflightReport report, IReadOnlyList<PreflightItem>? plannedActions = null)
     {
         InitializeComponent();
-        CheckItems.ItemsSource = report.Items.Select(PreflightDisplayItem.From).ToArray();
+        CheckItems.ItemsSource = report.Items
+            .Concat(plannedActions ?? [])
+            .Select(PreflightDisplayItem.From)
+            .ToArray();
         ContinueButton.IsEnabled = report.CanProceed;
 
         if (report.CanProceed)
@@ -18,8 +21,8 @@ public partial class PreflightWindow : Window
             SummaryPanel.BorderBrush = FindBrush("GreenBrush");
             SummaryText.Foreground = FindBrush("GreenBrush");
             SummaryText.Text = report.WarningCount == 0
-                ? "READY TO PROCEED / All safety checks passed."
-                : $"READY WITH {report.WarningCount} WARNING(S) / Review the amber entries before continuing.";
+                ? "READY TO START / Save open work, then confirm the listed flight-session actions."
+                : $"READY WITH {report.WarningCount} WARNING(S) / Review the amber entries and save open work before starting.";
         }
         else
         {
@@ -43,6 +46,7 @@ public partial class PreflightWindow : Window
             var (text, foreground, background) = item.Status switch
             {
                 PreflightStatus.Ready => ("READY", "#65D487", "#102219"),
+                PreflightStatus.Action => ("ACTION", "#58D7E8", "#102126"),
                 PreflightStatus.Warning => ("WARNING", "#F2B84B", "#2D2514"),
                 _ => ("BLOCKED", "#ED6A62", "#281313")
             };

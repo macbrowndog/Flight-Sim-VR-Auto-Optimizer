@@ -29,6 +29,7 @@ public static class UserProfileStore
         config.CustomApplications = saved.CustomApplications.Select(Copy).ToList();
         config.ApplicationSelections = Copy(saved.ApplicationSelections);
         config.ServiceSelections = Copy(saved.ServiceSelections);
+        config.ApplicationAfterFlightActions = Copy(saved.ApplicationAfterFlightActions);
         config.ActiveSavedProfileName = saved.Name;
         return true;
     }
@@ -50,6 +51,9 @@ public static class UserProfileStore
         CustomApplications = pending.CustomApplications.Select(Copy).ToList(),
         ApplicationSelections = Copy(current.ApplicationSelections),
         ServiceSelections = Copy(current.ServiceSelections),
+        ApplicationAfterFlightActions = Copy(pending.ApplicationAfterFlightActions.Count > 0
+            ? pending.ApplicationAfterFlightActions
+            : current.ApplicationAfterFlightActions),
         ActiveSavedProfileName = current.ActiveSavedProfileName,
         SavedProfiles = current.SavedProfiles.Select(Copy).ToList()
     };
@@ -63,6 +67,7 @@ public static class UserProfileStore
         CustomApplications = config.CustomApplications.Select(Copy).ToList(),
         ApplicationSelections = Copy(config.ApplicationSelections),
         ServiceSelections = Copy(config.ServiceSelections),
+        ApplicationAfterFlightActions = Copy(config.ApplicationAfterFlightActions),
         UpdatedAtUtc = DateTimeOffset.UtcNow
     };
 
@@ -112,9 +117,14 @@ public static class UserProfileStore
         CustomApplications = source.CustomApplications.Select(Copy).ToList(),
         ApplicationSelections = Copy(source.ApplicationSelections),
         ServiceSelections = Copy(source.ServiceSelections),
+        ApplicationAfterFlightActions = Copy(source.ApplicationAfterFlightActions),
         UpdatedAtUtc = source.UpdatedAtUtc
     };
 
     private static Dictionary<string, bool> Copy(Dictionary<string, bool> source) =>
+        new(source, StringComparer.OrdinalIgnoreCase);
+
+    private static Dictionary<string, ApplicationAfterFlightAction> Copy(
+        Dictionary<string, ApplicationAfterFlightAction> source) =>
         new(source, StringComparer.OrdinalIgnoreCase);
 }

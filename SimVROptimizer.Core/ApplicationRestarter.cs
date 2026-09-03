@@ -20,14 +20,13 @@ public sealed class ApplicationRestarter : IApplicationRestarter
 
     public async Task<bool> RestartAndVerifyAsync(string processName, string restartCommand, CancellationToken cancellationToken)
     {
-        var executable = ResolveExecutable(restartCommand);
-        if (executable is null) return false;
+        var launchTarget = ResolveLaunchTarget(processName, restartCommand);
+        if (launchTarget is null) return false;
 
-        // The optimizer normally runs elevated. Route the launch through Explorer so
-        // OneDrive returns to the user's standard desktop session rather than trying
-        // to start as an elevated process.
+        // The optimizer normally runs elevated. Route relaunches through Explorer so
+        // applications return to the user's standard desktop session.
         var startInfo = new ProcessStartInfo("explorer.exe") { UseShellExecute = true };
-        startInfo.ArgumentList.Add(executable);
+        startInfo.ArgumentList.Add(launchTarget);
         using (Process.Start(startInfo)) { }
 
         for (var attempt = 0; attempt < 15; attempt++)
@@ -40,13 +39,21 @@ public sealed class ApplicationRestarter : IApplicationRestarter
         return false;
     }
 
-    private static string? ResolveExecutable(string restartCommand)
+    private static string? ResolveLaunchTarget(string processName, string restartCommand)
     {
+        if (restartCommand.StartsWith("shell:", StringComparison.OrdinalIgnoreCase))
+        {
+            var shellTarget = restartCommand[6..].Trim();
+            if (shellTarget.StartsWith("shell:", StringComparison.OrdinalIgnoreCase)) return shellTarget;
+        }
+
         if (restartCommand.StartsWith("exe:", StringComparison.OrdinalIgnoreCase))
         {
             var recordedPath = restartCommand[4..].Trim();
             if (File.Exists(recordedPath)) return recordedPath;
         }
+
+        if (!processName.Equals("OneDrive", StringComparison.OrdinalIgnoreCase)) return null;
 
         var candidates = new[]
         {

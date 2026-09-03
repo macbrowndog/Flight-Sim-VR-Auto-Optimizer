@@ -22,6 +22,8 @@ public partial class MainWindow : Window
     private Task? _sessionTask;
     private bool _allowClose;
     private bool _applyingConfig;
+    private bool _applyingScanResults;
+    private bool _uiReady;
     private readonly SemaphoreSlim _configSaveLock = new(1, 1);
     private readonly PerformanceDashboardMonitor _dashboardMonitor;
     private readonly DashboardTelemetryServer _toolbarTelemetry;
@@ -31,6 +33,7 @@ public partial class MainWindow : Window
     private int _dashboardStutterCount;
     private int _dashboardCpuSpikeCount;
     private bool _restartRequiredAfterSession;
+    private bool _profileDirty;
 
     public MainWindow(bool continueSession = false, bool restoreLastSession = false)
     {
@@ -63,6 +66,7 @@ public partial class MainWindow : Window
         _toolbarPanelInstaller = new MsfsToolbarPanelInstaller(
             Path.Combine(AppContext.BaseDirectory, "MSFS", MsfsToolbarPanelInstaller.PackageName));
         AdminLabel.Text = AdminService.IsAdministrator() ? "ADMINISTRATOR" : "STANDARD USER";
+        _uiReady = true;
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
         Closed += MainWindow_Closed;
@@ -145,32 +149,11 @@ public partial class MainWindow : Window
 
         if (!automaticConfirmed || !preflight.CanProceed)
         {
-            var safetyWindow = new PreflightWindow(preflight) { Owner = this };
+            var safetyWindow = new PreflightWindow(preflight, BuildPlannedActionItems(simulator)) { Owner = this };
             if (safetyWindow.ShowDialog() != true) return;
         }
 
         AppendStatus($"Session safety check passed with {preflight.WarningCount} warning(s).");
-
-        if (_config.SessionMode == SessionMode.Automatic && !automaticConfirmed)
-        {
-            var selectedApps = _applications.Count(item => item.Selected && item.CanStop);
-            var selectedServices = _services.Count(item => item.Selected && item.CanStop);
-            var creatorApps = _config.Options.ContentCreatorMode
-                ? _applications.Count(item => SessionSelectionPolicy.IsContentCreatorApplication(item))
-                : 0;
-            var creatorServices = _config.Options.ContentCreatorMode
-                ? _services.Count(item => SessionSelectionPolicy.IsContentCreatorService(item))
-                : 0;
-            var creatorSummary = _config.Options.ContentCreatorMode
-                ? $" Content Creator Mode will keep {creatorApps} creator application(s) and {creatorServices} helper service(s) running."
-                : "";
-            var answer = MessageBox.Show(
-                $"Automatic {_config.Options.Profile} mode will close {selectedApps} selected application(s), stop {selectedServices} selected service(s), apply CPU settings, launch {_config.Options.VrRuntime}, and start {simulator.Name}.{creatorSummary} Save your work first. Continue?",
-                "Confirm automatic session",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Warning);
-            if (answer != MessageBoxResult.Yes) return;
-        }
 
         if (!AdminService.IsAdministrator())
         {
@@ -190,7 +173,11 @@ public partial class MainWindow : Window
                         Options = _config.Options,
                         ProcessNames = _applications.Where(item => item.Selected && item.CanStop).Select(item => item.ProcessName).ToArray(),
                         ServiceNames = _services.Where(item => item.Selected && item.CanStop).Select(item => item.ServiceName).ToArray(),
-                        CustomApplications = _config.CustomApplications
+                        CustomApplications = _config.CustomApplications,
+                        ApplicationAfterFlightActions = _applications.ToDictionary(
+                            item => item.ProcessName,
+                            item => item.AfterFlightAction,
+                            StringComparer.OrdinalIgnoreCase)
                     };
                     await JsonStore.SaveAtomicAsync(_paths.PendingLaunchFile, pending);
                     AdminService.RelaunchElevated("--continue-session");
@@ -215,14 +202,50 @@ public partial class MainWindow : Window
         await _sessionTask;
     }
 
+    private IReadOnlyList<PreflightItem> BuildPlannedActionItems(SimulatorDefinition simulator)
+    {
+        var selectedApplications = _applications.Where(item => item.Selected && item.CanStop).ToArray();
+        var restartCount = selectedApplications.Count(item =>
+            item.IsOneDrive || item.AfterFlightAction == ApplicationAfterFlightAction.Restart);
+        var leaveClosedCount = selectedApplications.Length - restartCount;
+        var selectedServices = _services.Count(item => item.Selected && item.CanStop);
+        var runtime = _config.Options.VrRuntime == VrRuntimePreference.None
+            ? "no separately launched VR runtime"
+            : _config.Options.VrRuntime.ToString();
+
+        var tuning = new List<string>();
+        if (_config.Options.UseUltimatePowerPlan) tuning.Add("CPU-aware power plan");
+        tuning.Add($"{_config.Options.ProcessPriority} simulator priority");
+        if (_config.Options.UseVendorAwareCpuSets) tuning.Add("vendor-aware CPU topology");
+        if (_config.Options.EnableNvidiaPersistence) tuning.Add("NVIDIA persistence");
+        if (_config.Options.UseOpenXrTurboMode) tuning.Add("OpenXR Turbo frame pacing");
+        if (_config.Options.UseMsfs2024FastLaunch && (simulator.Id is "msfs2024-steam" or "msfs2024-store")) tuning.Add("MSFS FastLaunch");
+        if (_config.Options.Profile == OptimizationProfile.Aggressive) tuning.Add("selected Aggressive adjustments");
+
+        return
+        [
+            new("Planned launch", PreflightStatus.Action,
+                $"{_config.SessionMode} {_config.Options.Profile} session will launch {simulator.Name} with {runtime}."),
+            new("Applications", PreflightStatus.Action,
+                $"{selectedApplications.Length} selected application(s) will close: {restartCount} will restart after the flight and {leaveClosedCount} will remain closed."),
+            new("Services", PreflightStatus.Action,
+                selectedServices == 0
+                    ? "No services will be stopped."
+                    : $"{selectedServices} selected service(s) will stop temporarily and return to their recorded state after the flight."),
+            new("Performance actions", PreflightStatus.Action,
+                tuning.Count == 0 ? "No optional performance actions are selected." : string.Join(", ", tuning) + ".")
+        ];
+    }
+
     private async Task RunSessionAsync(SimulatorDefinition simulator, OptimizerOptions options, CancellationToken cancellationToken)
     {
+        var closeApplicationAfterCleanup = false;
         try
         {
             SetStateDisplay("SESSION ACTIVE", "CyanBrush");
             await _coordinator.RunAsync(simulator, options, _applications, _services, cancellationToken);
             AppendStatus("Simulator exited; restoration completed.");
-            ShowRestorationReport();
+            closeApplicationAfterCleanup = ShowRestorationReport(closeApplicationOnCloseReport: true);
         }
         catch (OperationCanceledException)
         {
@@ -247,6 +270,11 @@ public partial class MainWindow : Window
             UpdateRecoveryState();
             if (!_coordinator.HasRecoveryJournal) TryMarkRecoveryComplete();
             if (!_coordinator.HasRecoveryJournal) CompletePipeline();
+            if (closeApplicationAfterCleanup && !_coordinator.HasRecoveryJournal)
+            {
+                _allowClose = true;
+                _ = Dispatcher.BeginInvoke(new Action(Close));
+            }
         }
     }
 
@@ -318,11 +346,16 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ShowRestorationReport()
+    private bool ShowRestorationReport(bool closeApplicationOnCloseReport = false)
     {
-        if (_coordinator.LastRestorationReport is not { } report) return;
+        if (_coordinator.LastRestorationReport is not { } report) return false;
         ReportButton.IsEnabled = true;
-        new RestorationReportWindow(report, _paths.RestorationReportFile) { Owner = this }.ShowDialog();
+        var reportWindow = new RestorationReportWindow(
+            report,
+            _paths.RestorationReportFile,
+            closeApplicationOnCloseReport) { Owner = this };
+        reportWindow.ShowDialog();
+        return reportWindow.CloseApplicationRequested;
     }
 
     private async Task<bool> IsRecordedSessionStillActiveAsync()
@@ -403,6 +436,7 @@ public partial class MainWindow : Window
         CustomApplications = ReadCustomApplications(),
         ApplicationSelections = new Dictionary<string, bool>(_config.ApplicationSelections, StringComparer.OrdinalIgnoreCase),
         ServiceSelections = new Dictionary<string, bool>(_config.ServiceSelections, StringComparer.OrdinalIgnoreCase),
+        ApplicationAfterFlightActions = new Dictionary<string, ApplicationAfterFlightAction>(_config.ApplicationAfterFlightActions, StringComparer.OrdinalIgnoreCase),
         ActiveSavedProfileName = _config.ActiveSavedProfileName,
         SavedProfiles = _config.SavedProfiles
     };
@@ -438,9 +472,11 @@ public partial class MainWindow : Window
             .Where(rule => !string.IsNullOrWhiteSpace(rule.RestartExecutablePath))
             .Select(rule => $"{rule.ProcessName}={rule.RestartExecutablePath}"));
         RefreshSavedProfiles();
-        _applyingConfig = false;
         ApplyCpuAwareControlRules();
         UpdateModeDescription();
+        _profileDirty = false;
+        _applyingConfig = false;
+        UpdateProfileStatus();
     }
 
     private async void MainWindow_Closed(object? sender, EventArgs e)
@@ -460,6 +496,64 @@ public partial class MainWindow : Window
 
     private string SelectedProfileName() =>
         (SavedProfileCombo.SelectedItem as string ?? SavedProfileCombo.Text).Trim();
+
+    private void ProfileSetting_Changed(object sender, RoutedEventArgs e) => MarkProfileDirty();
+
+    private void SavedProfileCombo_Changed(object sender, RoutedEventArgs e) => UpdateProfileStatus();
+
+    private void MarkProfileDirty()
+    {
+        if (!_uiReady || _applyingConfig || _applyingScanResults || ProfileStatusText is null) return;
+        _profileDirty = true;
+        UpdateProfileStatus();
+    }
+
+    private void UpdateProfileStatus()
+    {
+        if (!_uiReady || ProfileStatusText is null || SaveProfileButton is null || RevertProfileButton is null) return;
+
+        var active = _config.ActiveSavedProfileName;
+        var entered = SelectedProfileName();
+        var enteredProfileExists = _config.SavedProfiles.Any(profile =>
+            profile.Name.Equals(entered, StringComparison.OrdinalIgnoreCase));
+        var enteredIsActive = !string.IsNullOrWhiteSpace(active)
+            && entered.Equals(active, StringComparison.OrdinalIgnoreCase);
+        var running = _coordinator.IsRunning;
+
+        if (enteredProfileExists && !enteredIsActive)
+        {
+            ProfileStatusText.Text = $"PROFILE SELECTED / Choose LOAD to use '{entered}'.";
+            ProfileStatusText.Foreground = (Brush)FindResource("CyanBrush");
+            SaveProfileButton.IsEnabled = false;
+            RevertProfileButton.IsEnabled = false;
+            return;
+        }
+
+        if (enteredIsActive && _profileDirty)
+        {
+            ProfileStatusText.Text = $"PROFILE MODIFIED / '{active}' has unsaved changes.";
+            ProfileStatusText.Foreground = (Brush)FindResource("AccentBrush");
+            SaveProfileButton.IsEnabled = !running;
+            RevertProfileButton.IsEnabled = !running;
+            return;
+        }
+
+        if (enteredIsActive)
+        {
+            ProfileStatusText.Text = $"PROFILE SAVED / '{active}' matches the stored profile.";
+            ProfileStatusText.Foreground = (Brush)FindResource("GreenBrush");
+            SaveProfileButton.IsEnabled = false;
+            RevertProfileButton.IsEnabled = false;
+            return;
+        }
+
+        ProfileStatusText.Text = string.IsNullOrWhiteSpace(entered)
+            ? "CURRENT SETTINGS / Grid choices are auto-saved; enter a name to create a profile."
+            : $"NEW PROFILE / Save current settings as '{entered}'.";
+        ProfileStatusText.Foreground = (Brush)FindResource("MutedTextBrush");
+        SaveProfileButton.IsEnabled = !running && !string.IsNullOrWhiteSpace(entered);
+        RevertProfileButton.IsEnabled = !running && !string.IsNullOrWhiteSpace(active) && _profileDirty;
+    }
 
     private void ShowCpuProfile()
     {
@@ -483,7 +577,10 @@ public partial class MainWindow : Window
                 PowerPlanCheck.Content = "ULTIMATE PERFORMANCE / temporary";
                 PowerPlanCheck.ToolTip = "Temporarily enables Ultimate Performance for the flight and restores the original Windows power plan afterward.";
             }
+            var wasApplyingConfig = _applyingConfig;
+            _applyingConfig = true;
             ApplyCpuAwareControlRules();
+            _applyingConfig = wasApplyingConfig;
             CpuInfoText.Text = $"Detected CPU: {profile.Model} · {type} · {profile.PhysicalCoreCount} cores / {profile.LogicalProcessorCount} logical processors";
             DashCpuName.Text = profile.Model;
             var groups = Math.Max(1, profile.CpuSets.Select(item => item.Group).Distinct().Count());
@@ -499,8 +596,11 @@ public partial class MainWindow : Window
 
     private async void ScanButton_Click(object sender, RoutedEventArgs e) => await ScanSystemAsync();
 
-    private void SimulatorCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e) =>
+    private void SimulatorCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
         UpdateSimulatorOptionAvailability();
+        MarkProfileDirty();
+    }
 
     private void UpdateSimulatorOptionAvailability()
     {
@@ -528,9 +628,11 @@ public partial class MainWindow : Window
             var saved = UserProfileStore.SaveOrReplace(_config, SavedProfileCombo.Text);
             await SaveConfigAsync();
             RefreshSavedProfiles();
+            _profileDirty = false;
+            UpdateProfileStatus();
             AppendStatus($"Saved user profile '{saved.Name}' with the current simulator, options, applications, and services.");
             MessageBox.Show(
-                $"User profile '{saved.Name}' was saved successfully.\n\nThe simulator, workflow, VR runtime, optimization settings, application and service choices, and custom app list have been stored.",
+                $"User profile '{saved.Name}' was saved successfully.\n\nThe simulator, workflow, VR runtime, optimization settings, application and service choices, after-flight actions, and custom app list have been stored.",
                 "Profile saved successfully",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
@@ -760,6 +862,25 @@ public partial class MainWindow : Window
             MessageBoxImage.Information);
     }
 
+    private async void RevertProfileButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_coordinator.IsRunning) return;
+        var activeName = _config.ActiveSavedProfileName;
+        if (string.IsNullOrWhiteSpace(activeName) || !UserProfileStore.TryApply(_config, activeName))
+        {
+            MessageBox.Show("Load a saved profile before reverting changes.", "Revert profile changes", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        await SaveConfigAsync();
+        ApplyOptionsToControls();
+        ShowCpuProfile();
+        await ScanSystemAsync();
+        _profileDirty = false;
+        UpdateProfileStatus();
+        AppendStatus($"Reverted unsaved changes to user profile '{activeName}'.");
+    }
+
     private async void DeleteProfileButton_Click(object sender, RoutedEventArgs e)
     {
         if (_coordinator.IsRunning) return;
@@ -775,13 +896,18 @@ public partial class MainWindow : Window
         UserProfileStore.Delete(_config, name);
         await SaveConfigAsync();
         RefreshSavedProfiles();
+        _profileDirty = false;
+        UpdateProfileStatus();
         AppendStatus($"Deleted user profile '{name}'. Current on-screen settings were left unchanged.");
     }
 
     private void CaptureCurrentControls()
     {
         foreach (var application in _applications)
+        {
             _config.ApplicationSelections[application.ProcessName] = application.Selected;
+            _config.ApplicationAfterFlightActions[application.ProcessName] = application.AfterFlightAction;
+        }
         foreach (var service in _services)
             _config.ServiceSelections[service.ServiceName] = service.Selected;
 
@@ -805,8 +931,10 @@ public partial class MainWindow : Window
             var customApplications = ReadCustomApplications();
             _config.CustomApplications = customApplications;
             var result = await _scanner.ScanAsync(customApplications);
+            _applyingScanResults = true;
             _applications = result.Applications;
             _services = result.Services;
+            ApplyAfterFlightActions();
             SimulatorCombo.ItemsSource = result.Simulators;
             SimulatorGrid.ItemsSource = result.Simulators;
             AppsGrid.ItemsSource = _applications;
@@ -815,6 +943,7 @@ public partial class MainWindow : Window
                 ?? result.Simulators.FirstOrDefault(item => item.Definition.Id.StartsWith("msfs", StringComparison.OrdinalIgnoreCase))
                 ?? result.Simulators.FirstOrDefault();
             ApplyModeSelection();
+            _applyingScanResults = false;
             AppendStatus($"Scan complete: {result.Simulators.Count} simulator(s), {result.Applications.Count} app candidate(s), {result.Services.Count} relevant service(s).");
             var classifications = result.Applications
                 .GroupBy(item => item.Classification)
@@ -838,6 +967,7 @@ public partial class MainWindow : Window
         }
         finally
         {
+            _applyingScanResults = false;
             ScanButton.IsEnabled = !_coordinator.IsRunning;
             SetStateDisplay("READY", "GreenBrush");
             UpdateRecoveryState();
@@ -854,6 +984,7 @@ public partial class MainWindow : Window
             SelectAllStoppableItems();
         else
             ClearSelections();
+        MarkProfileDirty();
     }
 
     private void ContentCreatorCheck_Changed(object sender, RoutedEventArgs e)
@@ -865,6 +996,7 @@ public partial class MainWindow : Window
         else
             ApplySavedSelections();
         UpdateModeDescription();
+        MarkProfileDirty();
     }
 
     private void ProfileCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
@@ -895,6 +1027,7 @@ public partial class MainWindow : Window
         else
             ApplySavedSelections();
         UpdateModeDescription();
+        MarkProfileDirty();
     }
 
     private void UpdateModeDescription()
@@ -953,6 +1086,21 @@ public partial class MainWindow : Window
             ContentCreatorCheck.IsChecked == true);
     }
 
+    private void ApplyAfterFlightActions()
+    {
+        foreach (var application in _applications)
+        {
+            if (application.IsOneDrive)
+            {
+                application.AfterFlightAction = ApplicationAfterFlightAction.Restart;
+                continue;
+            }
+
+            if (_config.ApplicationAfterFlightActions.TryGetValue(application.ProcessName, out var action))
+                application.AfterFlightAction = action;
+        }
+    }
+
     private async void CandidateSelection_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not System.Windows.Controls.CheckBox checkBox) return;
@@ -974,6 +1122,22 @@ public partial class MainWindow : Window
         }
 
         await SaveSelectionPreferencesAsync();
+        MarkProfileDirty();
+    }
+
+    private async void AfterFlightSelection_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (_applyingConfig || _applyingScanResults) return;
+        if (sender is not System.Windows.Controls.ComboBox { DataContext: RunningAppCandidate application } comboBox) return;
+
+        // SelectionChanged can run before the TwoWay binding writes SelectedValue
+        // back to the row. Capture the newly selected choice directly.
+        if (comboBox.SelectedItem is not ApplicationAfterFlightChoice choice) return;
+        var requestedAction = choice.Action;
+        if (!ApplicationAfterFlightPolicy.ApplySelection(_config, application, requestedAction)) return;
+
+        await SaveSelectionPreferencesAsync();
+        MarkProfileDirty();
     }
 
     private async Task SaveSelectionPreferencesAsync()
@@ -1102,11 +1266,12 @@ public partial class MainWindow : Window
         PowerThrottlingCheck.IsEnabled = !running;
         TimeoutBox.IsEnabled = !running;
         CustomKillBox.IsEnabled = !running;
-        CustomRestartBox.IsEnabled = false;
+        CustomRestartBox.IsEnabled = !running;
         SaveCustomButton.IsEnabled = !running;
         ContentCreatorCheck.IsEnabled = !running;
         DashboardEnabledCheck.IsEnabled = !running;
         DashboardCsvCheck.IsEnabled = !running;
+        UpdateProfileStatus();
         RefreshToolbarPanelStatus();
         if (!running)
             SetStateDisplay(_restartRequiredAfterSession ? "RESTART REQUIRED" : "READY", _restartRequiredAfterSession ? "AccentBrush" : "GreenBrush");

@@ -6,9 +6,15 @@ namespace SimVROptimizer.App;
 
 public partial class RestorationReportWindow : Window
 {
-    public RestorationReportWindow(RestorationReport report, string reportPath)
+    private readonly bool _closeApplicationOnCloseReport;
+
+    public RestorationReportWindow(
+        RestorationReport report,
+        string reportPath,
+        bool closeApplicationOnCloseReport = false)
     {
         InitializeComponent();
+        _closeApplicationOnCloseReport = closeApplicationOnCloseReport;
         SessionText.Text = $"SESSION {report.SessionId}  /  {report.SimulatorName}  /  {report.CompletedAtUtc.ToLocalTime():g}";
         ReportGrid.ItemsSource = report.Items;
         ReportPathText.Text = "Saved report: " + reportPath;
@@ -30,7 +36,13 @@ public partial class RestorationReportWindow : Window
         }
     }
 
-    private void Close_Click(object sender, RoutedEventArgs e) => Close();
+    public bool CloseApplicationRequested { get; private set; }
+
+    private void Close_Click(object sender, RoutedEventArgs e)
+    {
+        CloseApplicationRequested = _closeApplicationOnCloseReport;
+        Close();
+    }
     private Brush FindBrush(string key) => (Brush)FindResource(key);
     private static Brush Brush(string color) => new SolidColorBrush((Color)ColorConverter.ConvertFromString(color));
 }

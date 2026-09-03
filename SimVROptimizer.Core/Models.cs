@@ -74,6 +74,18 @@ public enum SessionMode
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
+public enum ApplicationAfterFlightAction
+{
+    LeaveClosed,
+    Restart
+}
+
+public sealed record ApplicationAfterFlightChoice(ApplicationAfterFlightAction Action, string Label)
+{
+    public override string ToString() => Label;
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
 public enum SessionStage
 {
     Prepare = 1,
@@ -179,7 +191,17 @@ public sealed class DetectedSimulator
 
 public sealed class RunningAppCandidate : INotifyPropertyChanged
 {
+    private static readonly IReadOnlyList<ApplicationAfterFlightChoice> LeaveClosedOnly =
+        [new(ApplicationAfterFlightAction.LeaveClosed, "LEFT CLOSED")];
+    private static readonly IReadOnlyList<ApplicationAfterFlightChoice> RestartOnly =
+        [new(ApplicationAfterFlightAction.Restart, "RESTART")];
+    private static readonly IReadOnlyList<ApplicationAfterFlightChoice> AllAfterFlightChoices =
+    [
+        new(ApplicationAfterFlightAction.LeaveClosed, "LEFT CLOSED"),
+        new(ApplicationAfterFlightAction.Restart, "RESTART")
+    ];
     private bool _selected;
+    private ApplicationAfterFlightAction _afterFlightAction;
 
     public required string ProcessName { get; init; }
     public required string DisplayName { get; init; }
@@ -203,7 +225,31 @@ public sealed class RunningAppCandidate : INotifyPropertyChanged
         _ => "UNKNOWN"
     };
     public string RestartSupport => RestartCommand.StartsWith("none:", StringComparison.OrdinalIgnoreCase) ? "Manual" : "Automatic";
-    public string PostFlightState => "Left closed";
+    public bool IsOneDrive => ProcessName.Equals("OneDrive", StringComparison.OrdinalIgnoreCase);
+    public bool CanRestartAfterFlight => !RestartCommand.StartsWith("none:", StringComparison.OrdinalIgnoreCase);
+    public bool CanChangeAfterFlight => CanStop && CanRestartAfterFlight && !IsOneDrive;
+    public IReadOnlyList<ApplicationAfterFlightChoice> AfterFlightChoices =>
+        IsOneDrive ? RestartOnly : CanRestartAfterFlight ? AllAfterFlightChoices : LeaveClosedOnly;
+    public ApplicationAfterFlightChoice SelectedAfterFlightChoice =>
+        AfterFlightChoices.First(choice => choice.Action == AfterFlightAction);
+    public string PostFlightState => AfterFlightAction == ApplicationAfterFlightAction.Restart ? "Restart" : "Left closed";
+    public ApplicationAfterFlightAction AfterFlightAction
+    {
+        get => IsOneDrive ? ApplicationAfterFlightAction.Restart : _afterFlightAction;
+        set
+        {
+            var normalized = IsOneDrive
+                ? ApplicationAfterFlightAction.Restart
+                : value == ApplicationAfterFlightAction.Restart && !CanRestartAfterFlight
+                    ? ApplicationAfterFlightAction.LeaveClosed
+                    : value;
+            if (_afterFlightAction == normalized) return;
+            _afterFlightAction = normalized;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SelectedAfterFlightChoice));
+            OnPropertyChanged(nameof(PostFlightState));
+        }
+    }
     public bool Selected
     {
         get => _selected;
@@ -219,6 +265,29 @@ public sealed class RunningAppCandidate : INotifyPropertyChanged
 
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+}
+
+public static class ApplicationAfterFlightPolicy
+{
+    public static bool ApplySelection(
+        AppConfig config,
+        RunningAppCandidate application,
+        ApplicationAfterFlightAction requestedAction)
+    {
+        if (application.IsOneDrive) return false;
+
+        application.AfterFlightAction = requestedAction;
+        var normalizedAction = application.AfterFlightAction;
+        if (config.ApplicationAfterFlightActions.TryGetValue(application.ProcessName, out var currentAction)
+            && currentAction == normalizedAction)
+            return false;
+        if (!config.ApplicationAfterFlightActions.ContainsKey(application.ProcessName)
+            && normalizedAction == ApplicationAfterFlightAction.LeaveClosed)
+            return false;
+
+        config.ApplicationAfterFlightActions[application.ProcessName] = normalizedAction;
+        return true;
+    }
 }
 
 public static class SessionSelectionPolicy
@@ -368,6 +437,7 @@ public sealed class AppConfig
 {
     private Dictionary<string, bool> _applicationSelections = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<string, bool> _serviceSelections = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, ApplicationAfterFlightAction> _applicationAfterFlightActions = new(StringComparer.OrdinalIgnoreCase);
 
     public string? SelectedSimulatorId { get; set; }
     public SessionMode SessionMode { get; set; } = SessionMode.Manual;
@@ -383,6 +453,11 @@ public sealed class AppConfig
         get => _serviceSelections;
         set => _serviceSelections = new(value ?? [], StringComparer.OrdinalIgnoreCase);
     }
+    public Dictionary<string, ApplicationAfterFlightAction> ApplicationAfterFlightActions
+    {
+        get => _applicationAfterFlightActions;
+        set => _applicationAfterFlightActions = new(value ?? [], StringComparer.OrdinalIgnoreCase);
+    }
     public string? ActiveSavedProfileName { get; set; }
     public List<SavedUserProfile> SavedProfiles { get; set; } = [];
 }
@@ -391,6 +466,7 @@ public sealed class SavedUserProfile
 {
     private Dictionary<string, bool> _applicationSelections = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<string, bool> _serviceSelections = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, ApplicationAfterFlightAction> _applicationAfterFlightActions = new(StringComparer.OrdinalIgnoreCase);
 
     public string Name { get; set; } = "";
     public string? SelectedSimulatorId { get; set; }
@@ -407,6 +483,11 @@ public sealed class SavedUserProfile
         get => _serviceSelections;
         set => _serviceSelections = new(value ?? [], StringComparer.OrdinalIgnoreCase);
     }
+    public Dictionary<string, ApplicationAfterFlightAction> ApplicationAfterFlightActions
+    {
+        get => _applicationAfterFlightActions;
+        set => _applicationAfterFlightActions = new(value ?? [], StringComparer.OrdinalIgnoreCase);
+    }
     public DateTimeOffset UpdatedAtUtc { get; set; }
 }
 
@@ -418,12 +499,19 @@ public sealed class CustomApplicationRule
 
 public sealed class PendingLaunch
 {
+    private Dictionary<string, ApplicationAfterFlightAction> _applicationAfterFlightActions = new(StringComparer.OrdinalIgnoreCase);
+
     public required string SimulatorId { get; init; }
     public required SessionMode SessionMode { get; init; }
     public required OptimizerOptions Options { get; init; }
     public IReadOnlyList<string> ProcessNames { get; init; } = [];
     public IReadOnlyList<string> ServiceNames { get; init; } = [];
     public IReadOnlyList<CustomApplicationRule> CustomApplications { get; init; } = [];
+    public Dictionary<string, ApplicationAfterFlightAction> ApplicationAfterFlightActions
+    {
+        get => _applicationAfterFlightActions;
+        init => _applicationAfterFlightActions = new(value ?? [], StringComparer.OrdinalIgnoreCase);
+    }
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
