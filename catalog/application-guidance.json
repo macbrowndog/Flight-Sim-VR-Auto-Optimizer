@@ -57,5 +57,49 @@
       "why": "Intel graphics monitoring component that may support active performance tools.",
       "msfsImpact": "Usually low impact; closing it may interrupt graphics monitoring or telemetry."
     }
+  ],
+  "services": [
+    {
+      "names": ["SamsungMagicianSVC", "Samsung Magician Service"],
+      "guidance": "Recommend",
+      "impact": "Low",
+      "why": "Samsung Magician monitoring is not required while the simulator is running.",
+      "operationalNote": "Background drive monitoring may add occasional storage and CPU activity; the service is restored after the flight."
+    },
+    {
+      "names": ["MSPCManagerService", "Microsoft PC Manager Service"],
+      "guidance": "Recommend",
+      "impact": "Low",
+      "why": "Microsoft PC Manager background monitoring is optional during a flight.",
+      "operationalNote": "Monitoring and cleanup checks can add occasional CPU and storage activity; the service is restored after the flight."
+    },
+    {
+      "names": ["GamingServices", "GamingServicesNet"],
+      "guidance": "Protected",
+      "impact": "Low",
+      "why": "Microsoft Gaming Services supports Store and Xbox game licensing and online functionality.",
+      "operationalNote": "Protected to avoid disrupting simulator authentication, online services, and live weather."
+    },
+    {
+      "names": ["Tobii VRAPITMAXP3B Platform Runtime", "Tobii Platform Runtime"],
+      "guidance": "Protected",
+      "impact": "Low",
+      "why": "Tobii runtime service may be required by active eye-tracking or headset hardware.",
+      "operationalNote": "Protected to avoid interrupting tracking and VR hardware features."
+    },
+    {
+      "names": ["IntelGraphicsSoftware.Service", "Intel Graphics Software Service", "Service for Intel(R) PresentMon"],
+      "guidance": "KeepRunning",
+      "impact": "Low",
+      "why": "Intel graphics monitoring service may support active performance and graphics tools.",
+      "operationalNote": "Usually low impact; stopping it may interrupt graphics monitoring or telemetry."
+    },
+    {
+      "names": ["Private Internet Access Service", "pia-service"],
+      "guidance": "Protected",
+      "impact": "Low",
+      "why": "VPN tunnel service may be carrying the simulator's network connection.",
+      "operationalNote": "Protected because stopping it can disconnect online services, multiplayer, and live weather."
+    }
   ]
 }
