@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "applications": [
+    {
+      "names": ["Widgets", "WidgetService", "WidgetService.exe"],
+      "guidance": "Recommend",
+      "impact": "Low",
+      "why": "Windows Widgets is optional during a flight and can be closed for the session.",
+      "msfsImpact": "Live feeds and embedded web content can use background CPU, memory, and network resources."
+    },
+    {
+      "names": ["SamsungMagicianSVC", "Samsung Magician Service"],
+      "guidance": "Recommend",
+      "impact": "Low",
+      "why": "Samsung Magician monitoring is not required while the simulator is running.",
+      "msfsImpact": "Background drive monitoring may add occasional storage and CPU activity."
+    },
+    {
+      "names": ["MSPCManager", "MSPCManagerService", "Microsoft PC Manager"],
+      "guidance": "Recommend",
+      "impact": "Low",
+      "why": "Microsoft PC Manager background monitoring is optional during a flight.",
+      "msfsImpact": "Monitoring and cleanup checks can add occasional CPU and storage activity."
+    },
+    {
+      "names": ["FS2Crew Product Manager"],
+      "guidance": "Recommend",
+      "impact": "Low",
+      "why": "The FS2Crew product manager is not required after installed products have launched.",
+      "msfsImpact": "Updater and product-management activity can use background network and storage resources."
+    },
+    {
+      "names": ["ApplicationFrameHost", "Application Frame Host"],
+      "guidance": "Protected",
+      "impact": "Low",
+      "why": "Windows system host used by packaged applications; it is protected from session stopping.",
+      "msfsImpact": "Leave running to avoid interrupting Windows and Microsoft Store application windows."
+    },
+    {
+      "names": ["msedgewebview2", "Microsoft Edge WebView2"],
+      "guidance": "KeepRunning",
+      "impact": "Low",
+      "why": "Shared web component that may belong to another application currently in use.",
+      "msfsImpact": "Closing it may interrupt the application that owns the web view."
+    },
+    {
+      "names": ["Codex", "codex-code-mode-host", "node", "node_repl", "Node.js JavaScript Runtime"],
+      "guidance": "KeepRunning",
+      "impact": "Low",
+      "why": "Development or automation process whose current work may be interrupted if closed.",
+      "msfsImpact": "No known direct MSFS impact; leave running unless you know the task is no longer needed."
+    },
+    {
+      "names": ["IntelGraphicsSoftware.Service", "Service for Intel(R) PresentMon"],
+      "guidance": "KeepRunning",
+      "impact": "Low",
+      "why": "Intel graphics monitoring component that may support active performance tools.",
+      "msfsImpact": "Usually low impact; closing it may interrupt graphics monitoring or telemetry."
+    }
+  ]
+}
