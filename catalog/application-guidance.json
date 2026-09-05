@@ -3,6 +3,8 @@
   "applications": [
     {
       "names": ["Widgets", "WidgetService", "WidgetService.exe"],
+      "publishers": ["Microsoft Corporation"],
+      "products": ["Windows Widgets"],
       "guidance": "Recommend",
       "impact": "Low",
       "why": "Windows Widgets is optional during a flight and can be closed for the session.",
@@ -10,6 +12,8 @@
     },
     {
       "names": ["SamsungMagicianSVC", "Samsung Magician Service"],
+      "publishers": ["Samsung Electronics"],
+      "products": ["Samsung Magician"],
       "guidance": "Recommend",
       "impact": "Low",
       "why": "Samsung Magician monitoring is not required while the simulator is running.",
@@ -17,6 +21,8 @@
     },
     {
       "names": ["MSPCManager", "MSPCManagerService", "Microsoft PC Manager"],
+      "publishers": ["Microsoft Corporation"],
+      "products": ["Microsoft PC Manager"],
       "guidance": "Recommend",
       "impact": "Low",
       "why": "Microsoft PC Manager background monitoring is optional during a flight.",
@@ -24,6 +30,8 @@
     },
     {
       "names": ["FS2Crew Product Manager"],
+      "publishers": ["FS2Crew"],
+      "products": ["FS2Crew Product Manager"],
       "guidance": "Recommend",
       "impact": "Low",
       "why": "The FS2Crew product manager is not required after installed products have launched.",
@@ -31,6 +39,8 @@
     },
     {
       "names": ["ApplicationFrameHost", "Application Frame Host"],
+      "publishers": ["Microsoft Corporation"],
+      "products": ["Microsoft Windows Operating System"],
       "guidance": "Protected",
       "impact": "Low",
       "why": "Windows system host used by packaged applications; it is protected from session stopping.",
@@ -38,6 +48,8 @@
     },
     {
       "names": ["msedgewebview2", "Microsoft Edge WebView2"],
+      "publishers": ["Microsoft Corporation"],
+      "products": ["Microsoft Edge WebView2"],
       "guidance": "KeepRunning",
       "impact": "Low",
       "why": "Shared web component that may belong to another application currently in use.",
@@ -45,6 +57,8 @@
     },
     {
       "names": ["Codex", "codex-code-mode-host", "node", "node_repl", "Node.js JavaScript Runtime"],
+      "publishers": ["OpenAI", "Node.js"],
+      "products": ["Codex", "Node.js"],
       "guidance": "KeepRunning",
       "impact": "Low",
       "why": "Development or automation process whose current work may be interrupted if closed.",
@@ -52,6 +66,8 @@
     },
     {
       "names": ["IntelGraphicsSoftware.Service", "Service for Intel(R) PresentMon"],
+      "publishers": ["Intel Corporation"],
+      "products": ["Intel Graphics Software", "PresentMon"],
       "guidance": "KeepRunning",
       "impact": "Low",
       "why": "Intel graphics monitoring component that may support active performance tools.",
@@ -61,6 +77,8 @@
   "services": [
     {
       "names": ["SamsungMagicianSVC", "Samsung Magician Service"],
+      "publishers": ["Samsung Electronics"],
+      "products": ["Samsung Magician"],
       "guidance": "Recommend",
       "impact": "Low",
       "why": "Samsung Magician monitoring is not required while the simulator is running.",
@@ -68,6 +86,8 @@
     },
     {
       "names": ["MSPCManagerService", "Microsoft PC Manager Service"],
+      "publishers": ["Microsoft Corporation"],
+      "products": ["Microsoft PC Manager"],
       "guidance": "Recommend",
       "impact": "Low",
       "why": "Microsoft PC Manager background monitoring is optional during a flight.",
@@ -75,6 +95,8 @@
     },
     {
       "names": ["GamingServices", "GamingServicesNet"],
+      "publishers": ["Microsoft Corporation"],
+      "products": ["Gaming Services"],
       "guidance": "Protected",
       "impact": "Low",
       "why": "Microsoft Gaming Services supports Store and Xbox game licensing and online functionality.",
@@ -82,6 +104,8 @@
     },
     {
       "names": ["Tobii VRAPITMAXP3B Platform Runtime", "Tobii Platform Runtime"],
+      "publishers": ["Tobii"],
+      "products": ["Tobii Platform Runtime"],
       "guidance": "Protected",
       "impact": "Low",
       "why": "Tobii runtime service may be required by active eye-tracking or headset hardware.",
@@ -89,6 +113,8 @@
     },
     {
       "names": ["IntelGraphicsSoftware.Service", "Intel Graphics Software Service", "Service for Intel(R) PresentMon"],
+      "publishers": ["Intel Corporation"],
+      "products": ["Intel Graphics Software", "PresentMon"],
       "guidance": "KeepRunning",
       "impact": "Low",
       "why": "Intel graphics monitoring service may support active performance and graphics tools.",
@@ -96,6 +122,8 @@
     },
     {
       "names": ["Private Internet Access Service", "pia-service"],
+      "publishers": ["Private Internet Access"],
+      "products": ["Private Internet Access"],
       "guidance": "Protected",
       "impact": "Low",
       "why": "VPN tunnel service may be carrying the simulator's network connection.",
