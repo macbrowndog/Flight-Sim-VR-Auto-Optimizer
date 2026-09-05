@@ -454,7 +454,7 @@ public sealed class SystemScanner
                 ProcessName = group.Key,
                 DisplayName = FirstNonBlank(profile?.DisplayName, fileDescription, windowTitle, group.Key),
                 Impact = profile?.Level ?? ImpactLevel.Unknown,
-                Reason = profile?.Reason ?? "Third-party or visible application with no known MSFS-specific conflict. Stop only if you recognize it and do not need it.",
+                Reason = profile?.Reason ?? "No known direct MSFS impact. Closing it may free some CPU or memory, but could interrupt features you use.",
                 InstanceCount = processes.Length,
                 MemoryMb = memory,
                 ExecutablePath = path,
@@ -491,8 +491,9 @@ public sealed class SystemScanner
                 {
                     ServiceName = name,
                     DisplayName = profile?.DisplayName ?? name,
+                    ExecutablePath = ServiceExecutablePath.Resolve(imagePath),
                     Impact = profile?.Level ?? ImpactLevel.Unknown,
-                    Reason = profile?.Reason ?? "Running third-party service with no known MSFS-specific impact. Stop only if you understand what depends on it.",
+                    Reason = profile?.Reason ?? "No known direct MSFS impact. Stopping it may affect an associated hardware, network, update, or background feature.",
                     CanStop = canStop,
                     Classification = classification.Classification,
                     ClassificationReason = classification.Reason

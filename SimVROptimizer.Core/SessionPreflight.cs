@@ -98,7 +98,7 @@ public static class SessionPreflight
         var detail = $"{selectedApps.Length} application(s) and {selectedServices} service(s) are selected for this session.";
         if (unknownApps > 0)
             return new("Session selections", PreflightStatus.Warning,
-                $"{detail} Review the {unknownApps} selected application(s) with unknown impact before continuing.");
+                $"{detail} Review the {unknownApps} selected application(s) marked Keep Running before continuing.");
 
         return new("Session selections", PreflightStatus.Ready, detail);
     }

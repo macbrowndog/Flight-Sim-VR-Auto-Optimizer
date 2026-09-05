@@ -40,6 +40,7 @@ public sealed class OptimizerOptions
     public int LaunchTimeoutSeconds { get; set; } = 180;
     public bool EnablePerformanceDashboard { get; set; } = true;
     public bool LogPerformanceCsv { get; set; }
+    public bool EnableOnlineApplicationGuidance { get; set; }
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
@@ -173,6 +174,31 @@ public enum WorkloadClassification
 
 public sealed record WorkloadClassificationResult(WorkloadClassification Classification, string Reason);
 
+public enum SoftwareIdentityConfidence
+{
+    Unidentified,
+    Likely,
+    Identified,
+    Verified
+}
+
+public sealed record SoftwareIdentity(
+    SoftwareIdentityConfidence Confidence,
+    string Publisher,
+    string Product,
+    string Version,
+    string Sha256,
+    bool TrustedSignature,
+    string Source)
+{
+    public string Label => Confidence.ToString().ToUpperInvariant();
+    public string Details =>
+        $"{Label} / Publisher: {Value(Publisher)} / Product: {Value(Product)} / Version: {Value(Version)} / " +
+        $"Signature: {(TrustedSignature ? "trusted" : "not verified")} / Source: {Source}";
+
+    private static string Value(string value) => string.IsNullOrWhiteSpace(value) ? "not available" : value;
+}
+
 public static class CpuProtectionPolicy
 {
     public static bool IsXboxGameBarProtected(CpuProfile? profile, string processName) =>
@@ -205,25 +231,29 @@ public sealed class RunningAppCandidate : INotifyPropertyChanged
 
     public required string ProcessName { get; init; }
     public required string DisplayName { get; init; }
-    public required ImpactLevel Impact { get; init; }
-    public required string Reason { get; init; }
+    public required ImpactLevel Impact { get; set; }
+    public required string Reason { get; set; }
     public required int InstanceCount { get; init; }
     public required long MemoryMb { get; init; }
     public string? ExecutablePath { get; init; }
+    public SoftwareIdentity? Identity { get; set; }
+    public string IdentityLabel => Identity?.Label ?? "UNIDENTIFIED";
+    public string IdentityDetails => Identity?.Details ?? "No reliable executable identity was available.";
     public required string RestartCommand { get; init; }
-    public required bool CanStop { get; init; }
+    public required bool CanStop { get; set; }
     public bool SelectionRequired { get; init; }
     public bool CanChangeSelection => CanStop && !SelectionRequired;
     public bool IsCustom { get; init; }
-    public WorkloadClassification Classification { get; init; } = WorkloadClassification.Unknown;
-    public string ClassificationReason { get; init; } = "Not yet classified.";
+    public WorkloadClassification Classification { get; set; } = WorkloadClassification.Unknown;
+    public string ClassificationReason { get; set; } = "Not yet classified.";
     public string ClassificationLabel => Classification switch
     {
-        WorkloadClassification.Recommended => "RECOMMENDED",
-        WorkloadClassification.Optional => "OPTIONAL",
+        WorkloadClassification.Recommended => "RECOMMEND",
+        WorkloadClassification.Optional => "KEEP RUNNING",
         WorkloadClassification.Protected => "PROTECTED",
-        _ => "UNKNOWN"
+        _ => "KEEP RUNNING"
     };
+    public string ImpactLabel => Impact == ImpactLevel.Unknown ? "NO KNOWN" : Impact.ToString();
     public string RestartSupport => RestartCommand.StartsWith("none:", StringComparison.OrdinalIgnoreCase) ? "Manual" : "Automatic";
     public bool IsOneDrive => ProcessName.Equals("OneDrive", StringComparison.OrdinalIgnoreCase);
     public bool CanRestartAfterFlight => !RestartCommand.StartsWith("none:", StringComparison.OrdinalIgnoreCase);
@@ -397,18 +427,23 @@ public sealed class ServiceCandidate : INotifyPropertyChanged
 
     public required string ServiceName { get; init; }
     public required string DisplayName { get; init; }
-    public required ImpactLevel Impact { get; init; }
-    public required string Reason { get; init; }
-    public required bool CanStop { get; init; }
-    public WorkloadClassification Classification { get; init; } = WorkloadClassification.Unknown;
-    public string ClassificationReason { get; init; } = "Not yet classified.";
+    public string? ExecutablePath { get; init; }
+    public SoftwareIdentity? Identity { get; set; }
+    public string IdentityLabel => Identity?.Label ?? "UNIDENTIFIED";
+    public string IdentityDetails => Identity?.Details ?? "No reliable service executable identity was available.";
+    public required ImpactLevel Impact { get; set; }
+    public required string Reason { get; set; }
+    public required bool CanStop { get; set; }
+    public WorkloadClassification Classification { get; set; } = WorkloadClassification.Unknown;
+    public string ClassificationReason { get; set; } = "Not yet classified.";
     public string ClassificationLabel => Classification switch
     {
-        WorkloadClassification.Recommended => "RECOMMENDED",
-        WorkloadClassification.Optional => "OPTIONAL",
+        WorkloadClassification.Recommended => "RECOMMEND",
+        WorkloadClassification.Optional => "KEEP RUNNING",
         WorkloadClassification.Protected => "PROTECTED",
-        _ => "UNKNOWN"
+        _ => "KEEP RUNNING"
     };
+    public string ImpactLabel => Impact == ImpactLevel.Unknown ? "NO KNOWN" : Impact.ToString();
     public bool Selected
     {
         get => _selected;

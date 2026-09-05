@@ -34,8 +34,8 @@ It scans the local PC, explains the likely MSFS impact of running applications a
 - Standard profile includes DNS flush, High process priority, and vendor-aware CPU Sets; service stopping is reserved for Aggressive mode
 - Aggressive profile adds reversible Game Bar/Game DVR, fullscreen-optimization, timer-resolution, process power-throttling, standby-memory clearing, and approved service control
 - Optional one-time standby-memory clearing in Aggressive mode
-- Background application and service impact guidance
-- Four-level application and service guidance: Recommended, Optional, Protected, and Unknown; automatic application selection uses only verified Recommended applications
+- Clear **Recommend**, **Keep Running**, and **Protected** application and service guidance; automatic selection uses only verified recommended items
+- Optional online guidance catalogue with local executable identity checks using file metadata, publisher, product, Authenticode signature, and SHA-256
 - Protected Steam, Xbox/MSFS, VR/OpenXR, networking, security, and flight-control components
 - Content Creator Mode for OBS, Streamlabs, Stream Deck, NVIDIA Broadcast, Voicemeeter, Elgato, and other capture tools
 - Aviation instrument-themed dark interface with live session status and rotating logs
@@ -106,7 +106,9 @@ Additional simulator configurations may be added in future releases.
 - Stop selected running applications for the session; choose **Leave Closed** or **Restart** for each restartable application, while OneDrive is always restored
 - Stop selected relevant services only when they were running, then restore them afterward
 
-The scan presents an impact level and explanation for each candidate. Manual mode retains saved choices, while Automatic mode selects verified Recommended applications and approved Aggressive services. Items without reliable classification remain available for manual selection; Windows download, simulator-launcher, VR-runtime, Xbox Gaming Services, and common flight-control services are protected. On AMD X3D systems, detected Process Lasso power controllers are locked selected so they cannot override Windows Balanced.
+The scan presents an impact level and explanation for each candidate. Manual mode retains saved choices, while Automatic mode selects verified **Recommend** applications and approved Aggressive services. Items without reliable classification are labelled **Keep Running** and remain available for deliberate manual selection; Windows download, simulator-launcher, VR-runtime, Xbox Gaming Services, and common flight-control services are protected. On AMD X3D systems, detected Process Lasso power controllers are locked selected so they cannot override Windows Balanced.
+
+The optional **Online Guidance** switch downloads the complete curated application and service catalogue; it does not upload process names, service names, executable paths, hashes, or PC details. When enabled, local executable metadata, signatures, and SHA-256 hashes are inspected on the PC and matched against catalogue names, publishers, products, and hashes. The Identity column reports **Verified**, **Identified**, **Likely**, or **Unidentified** with full details on hover. Local protection rules always take priority, and unmatched items remain **Keep Running**.
 
 Standard profile limits Automatic application selection to high- and medium-impact items and uses CPU-aware power handling, High simulator priority, vendor-aware CPU Sets, NVIDIA persistence, and a DNS flush. AMD X3D systems use Windows Balanced; other supported processors use temporary Ultimate Performance. It does not stop services. Aggressive profile includes low- and unknown-impact applications, enables service selection (including approved SysMain, Print Spooler, iCloud and updater candidates), and adds the advanced session tuning shown in the UI. Every profile toggle remains editable before launch.
 
@@ -120,7 +122,7 @@ The Custom Apps tab stores process names in `config.json`. Optional restart entr
 
 ### Saved user profiles
 
-The Flight Profile tab can store multiple named setups. Configure the simulator, workflow, optimization options, application/service checkboxes, application **After Flight** actions, VR runtime, and custom app lists; type a name in **Saved User Profile**, then select **Save Changes**. Choose that name and select **Load** on a later run to restore the complete setup and rescan the PC. The profile status clearly reports **Saved** or **Modified**, and **Revert** discards unsaved changes. Saving with an existing name updates that profile. Deleting a profile does not alter the current on-screen settings. The most recently loaded or saved profile name and its active settings are retained when the application is restarted.
+The Flight Profile tab can store multiple named setups. Configure the simulator, workflow, optimization options, application/service checkboxes, application **After Flight** actions, VR runtime, online-guidance preference, and custom app lists; type a name in **Saved User Profile**, then select **Save Changes**. Choose that name and select **Load** on a later run to restore the complete setup and rescan the PC. The profile status clearly reports **Saved** or **Modified**, and **Revert** discards unsaved changes. Saving with an existing name updates that profile. Deleting a profile does not alter the current on-screen settings. The most recently loaded or saved profile name and its active settings are retained when the application is restarted.
 
 Content Creator Mode can be enabled in Session options. In Automatic mode it keeps OBS, Streamlabs, Twitch Studio, Discord, Stream Deck, NVIDIA Broadcast, Voicemeeter, Elgato, XSplit, vMix, TikTok LIVE Studio, Meld Studio, NDI, Blackmagic, AJA, and matching helper services running. Manual mode remains fully user-controlled.
 
@@ -163,6 +165,20 @@ The test runner has no third-party test framework dependency. It covers output p
 ## License
 
 Licensed under the [MIT License](LICENSE).
+
+## Release notes — 2.2.0
+
+- Added opt-in online guidance for both running applications and services using a remotely maintained catalogue; the complete catalogue is downloaded and no local process names, service names, paths, hashes, or PC details are uploaded.
+- Added local executable identity inspection using file metadata, publisher, product, version, Authenticode trust, and SHA-256, with **Verified**, **Identified**, **Likely**, and **Unidentified** confidence levels.
+- Added an **Identity** column to the Applications and Services tabs with full identification details available on hover.
+- Added confidence-based catalogue matching by exact hash, trusted publisher/product, product/name, and executable or service name; local protection rules always take priority over downloaded guidance.
+- Replaced ambiguous **Optional** and **Unknown** display labels with the safer **Keep Running**, and changed unknown impact text to **No Known**. Automatic selection continues to use only recommended items.
+- Sorted selected applications and services together at the top of their grids and retained the ordering as selections change.
+- Improved unrecognized application and service explanations so they describe the safe user action instead of referring to an internal verified catalogue.
+- Truncated long guidance and impact notes cleanly in the grids and added wrapped hover text showing the complete explanation.
+- Saved the online-guidance preference in both the main configuration and named user profiles.
+- Added a downloadable application and service guidance catalogue with publisher and product metadata, while retaining safe **Keep Running** behavior when the catalogue is unavailable or an item is unmatched.
+- Expanded automated validation to 46 passing tests, including online matching, local-protection precedence, executable-path parsing, hashing, and trusted-signature verification.
 
 ## Release notes — 2.1.0
 

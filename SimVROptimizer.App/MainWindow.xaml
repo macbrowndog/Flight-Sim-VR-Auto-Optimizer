@@ -39,7 +39,7 @@
 
         <Border Grid.Row="1" Style="{StaticResource PanelFrame}" Padding="10" Margin="0,0,0,7">
             <Grid>
-                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <StackPanel Width="160" VerticalAlignment="Center">
                     <TextBlock Text="SIMULATOR SELECT" Style="{StaticResource InstrumentLabel}" />
                     <TextBlock Text="NAV / FLIGHT SOURCE" FontFamily="Consolas" FontSize="10" Foreground="{StaticResource MutedTextBrush}" Margin="0,3,0,0"/>
@@ -47,7 +47,10 @@
                 <ComboBox x:Name="SimulatorCombo" Grid.Column="1" Height="38" Margin="12,0" SelectionChanged="SimulatorCombo_SelectionChanged">
                     <ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Name}" Foreground="{StaticResource CyanBrush}" FontFamily="Consolas" /></DataTemplate></ComboBox.ItemTemplate>
                 </ComboBox>
-                <Button x:Name="ScanButton" Grid.Column="2" Content="SCAN THIS PC" Click="ScanButton_Click" Background="#233137" Foreground="{StaticResource AccentBrush}" />
+                <CheckBox x:Name="OnlineGuidanceCheck" Grid.Column="2" Content="ONLINE GUIDANCE / opt-in" Margin="8,0,14,0" VerticalAlignment="Center"
+                          Checked="OnlineGuidanceCheck_Changed" Unchecked="OnlineGuidanceCheck_Changed"
+                          ToolTip="Downloads a curated application and service guidance catalogue, then rescans this PC. No process names, service names, file paths, or PC details are uploaded." />
+                <Button x:Name="ScanButton" Grid.Column="3" Content="SCAN THIS PC" Click="ScanButton_Click" Background="#233137" Foreground="{StaticResource AccentBrush}" />
             </Grid>
         </Border>
 
@@ -65,13 +68,20 @@
                 <Grid Background="#0C1214">
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                     <Border Background="#151D20" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="12,8">
-                        <TextBlock Text="APP LOAD CONTROL  /  Select what to close and choose whether each application stays closed or restarts after the flight." FontFamily="Consolas" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" />
+                        <TextBlock Text="APP LOAD CONTROL  /  RECOMMEND = safe to close  ·  KEEP RUNNING = review first  ·  PROTECTED = locked" FontFamily="Consolas" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" VerticalAlignment="Center" />
                     </Border>
                     <DataGrid x:Name="AppsGrid" Grid.Row="1" AutoGenerateColumns="False" Background="#0C1214" Foreground="{StaticResource TextBrush}"
                               RowBackground="#0C1214" AlternatingRowBackground="#111A1D" GridLinesVisibility="Horizontal" BorderThickness="0">
                         <DataGrid.Columns>
                             <DataGridTemplateColumn Header="CUT" Width="55"><DataGridTemplateColumn.CellTemplate><DataTemplate><CheckBox IsChecked="{Binding Selected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding CanChangeSelection}" Click="CandidateSelection_Click" HorizontalAlignment="Center" ToolTip="Process Lasso power controllers are locked selected on AMD X3D so Windows Balanced can remain active." /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
                             <DataGridTextColumn Header="APPLICATION" Binding="{Binding DisplayName}" Width="1.4*" IsReadOnly="True" />
+                            <DataGridTemplateColumn Header="IDENTITY" Width="105" IsReadOnly="True">
+                                <DataGridTemplateColumn.CellTemplate><DataTemplate>
+                                    <TextBlock Text="{Binding IdentityLabel}" FontFamily="Consolas" Foreground="{StaticResource CyanBrush}">
+                                        <TextBlock.ToolTip><ToolTip MaxWidth="540"><TextBlock Text="{Binding IdentityDetails}" TextWrapping="Wrap" MaxWidth="520" /></ToolTip></TextBlock.ToolTip>
+                                    </TextBlock>
+                                </DataTemplate></DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                             <DataGridTemplateColumn Header="GUIDANCE" Width="112" IsReadOnly="True">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
@@ -83,7 +93,7 @@
                                                         <DataTrigger Binding="{Binding Classification}" Value="Recommended"><Setter Property="Foreground" Value="{StaticResource GreenBrush}" /></DataTrigger>
                                                         <DataTrigger Binding="{Binding Classification}" Value="Optional"><Setter Property="Foreground" Value="{StaticResource AccentBrush}" /></DataTrigger>
                                                         <DataTrigger Binding="{Binding Classification}" Value="Protected"><Setter Property="Foreground" Value="{StaticResource CyanBrush}" /></DataTrigger>
-                                                        <DataTrigger Binding="{Binding Classification}" Value="Unknown"><Setter Property="Foreground" Value="{StaticResource RedBrush}" /></DataTrigger>
+                                                        <DataTrigger Binding="{Binding Classification}" Value="Unknown"><Setter Property="Foreground" Value="{StaticResource AccentBrush}" /></DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
                                             </TextBlock.Style>
@@ -91,7 +101,7 @@
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTextColumn Header="IMPACT" Binding="{Binding Impact}" Width="75" IsReadOnly="True" />
+                            <DataGridTextColumn Header="IMPACT" Binding="{Binding ImpactLabel}" Width="75" IsReadOnly="True" />
                             <DataGridTextColumn Header="MEM MB" Binding="{Binding MemoryMb}" Width="78" IsReadOnly="True" />
                             <DataGridTemplateColumn Header="AFTER FLIGHT" Width="125">
                                 <DataGridTemplateColumn.CellTemplate>
@@ -110,8 +120,34 @@
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTextColumn Header="WHY THIS GUIDANCE" Binding="{Binding ClassificationReason}" Width="2.2*" IsReadOnly="True" />
-                            <DataGridTextColumn Header="MSFS IMPACT NOTE" Binding="{Binding Reason}" Width="2.8*" IsReadOnly="True" />
+                            <DataGridTemplateColumn Header="WHY THIS GUIDANCE" Width="2.2*" IsReadOnly="True">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding ClassificationReason}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                                                   VerticalAlignment="Center">
+                                            <TextBlock.ToolTip>
+                                                <ToolTip MaxWidth="520">
+                                                    <TextBlock Text="{Binding ClassificationReason}" TextWrapping="Wrap" MaxWidth="500" />
+                                                </ToolTip>
+                                            </TextBlock.ToolTip>
+                                        </TextBlock>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="MSFS IMPACT NOTE" Width="2.8*" IsReadOnly="True">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Reason}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                                                   VerticalAlignment="Center">
+                                            <TextBlock.ToolTip>
+                                                <ToolTip MaxWidth="520">
+                                                    <TextBlock Text="{Binding Reason}" TextWrapping="Wrap" MaxWidth="500" />
+                                                </ToolTip>
+                                            </TextBlock.ToolTip>
+                                        </TextBlock>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                         </DataGrid.Columns>
                     </DataGrid>
                 </Grid>
@@ -120,13 +156,20 @@
                 <Grid Background="#0C1214">
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                     <Border Background="#151D20" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="12,8">
-                        <TextBlock Text="SERVICE LOAD CONTROL  /  RECOMMENDED = safe default  ·  OPTIONAL = review first  ·  PROTECTED = locked  ·  AFTER FLIGHT = always restored" FontFamily="Consolas" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" />
+                        <TextBlock Text="SERVICE LOAD CONTROL  /  RECOMMEND = safe default  ·  KEEP RUNNING = review first  ·  PROTECTED = locked  ·  AFTER FLIGHT = always restored" FontFamily="Consolas" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" />
                     </Border>
                     <DataGrid x:Name="ServicesGrid" Grid.Row="1" AutoGenerateColumns="False" Background="#0C1214" Foreground="{StaticResource TextBrush}"
                               RowBackground="#0C1214" AlternatingRowBackground="#111A1D" GridLinesVisibility="Horizontal" BorderThickness="0">
                         <DataGrid.Columns>
                             <DataGridTemplateColumn Header="CUT" Width="55"><DataGridTemplateColumn.CellTemplate><DataTemplate><CheckBox IsChecked="{Binding Selected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding CanStop}" Click="CandidateSelection_Click" HorizontalAlignment="Center" /></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
                             <DataGridTextColumn Header="SERVICE" Binding="{Binding DisplayName}" Width="1.4*" IsReadOnly="True" />
+                            <DataGridTemplateColumn Header="IDENTITY" Width="105" IsReadOnly="True">
+                                <DataGridTemplateColumn.CellTemplate><DataTemplate>
+                                    <TextBlock Text="{Binding IdentityLabel}" FontFamily="Consolas" Foreground="{StaticResource CyanBrush}">
+                                        <TextBlock.ToolTip><ToolTip MaxWidth="540"><TextBlock Text="{Binding IdentityDetails}" TextWrapping="Wrap" MaxWidth="520" /></ToolTip></TextBlock.ToolTip>
+                                    </TextBlock>
+                                </DataTemplate></DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                             <DataGridTemplateColumn Header="GUIDANCE" Width="112" IsReadOnly="True">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
@@ -138,7 +181,7 @@
                                                         <DataTrigger Binding="{Binding Classification}" Value="Recommended"><Setter Property="Foreground" Value="{StaticResource GreenBrush}" /></DataTrigger>
                                                         <DataTrigger Binding="{Binding Classification}" Value="Optional"><Setter Property="Foreground" Value="{StaticResource AccentBrush}" /></DataTrigger>
                                                         <DataTrigger Binding="{Binding Classification}" Value="Protected"><Setter Property="Foreground" Value="{StaticResource CyanBrush}" /></DataTrigger>
-                                                        <DataTrigger Binding="{Binding Classification}" Value="Unknown"><Setter Property="Foreground" Value="{StaticResource RedBrush}" /></DataTrigger>
+                                                        <DataTrigger Binding="{Binding Classification}" Value="Unknown"><Setter Property="Foreground" Value="{StaticResource AccentBrush}" /></DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
                                             </TextBlock.Style>
@@ -146,7 +189,7 @@
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTextColumn Header="IMPACT" Binding="{Binding Impact}" Width="75" IsReadOnly="True" />
+                            <DataGridTextColumn Header="IMPACT" Binding="{Binding ImpactLabel}" Width="75" IsReadOnly="True" />
                             <DataGridTemplateColumn Header="AFTER FLIGHT" Width="115" IsReadOnly="True">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
@@ -154,8 +197,34 @@
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTextColumn Header="WHY THIS GUIDANCE" Binding="{Binding ClassificationReason}" Width="2.2*" IsReadOnly="True" />
-                            <DataGridTextColumn Header="OPERATIONAL NOTE" Binding="{Binding Reason}" Width="2.8*" IsReadOnly="True" />
+                            <DataGridTemplateColumn Header="WHY THIS GUIDANCE" Width="2.2*" IsReadOnly="True">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding ClassificationReason}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                                                   VerticalAlignment="Center">
+                                            <TextBlock.ToolTip>
+                                                <ToolTip MaxWidth="520">
+                                                    <TextBlock Text="{Binding ClassificationReason}" TextWrapping="Wrap" MaxWidth="500" />
+                                                </ToolTip>
+                                            </TextBlock.ToolTip>
+                                        </TextBlock>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="OPERATIONAL NOTE" Width="2.8*" IsReadOnly="True">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Reason}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                                                   VerticalAlignment="Center">
+                                            <TextBlock.ToolTip>
+                                                <ToolTip MaxWidth="520">
+                                                    <TextBlock Text="{Binding Reason}" TextWrapping="Wrap" MaxWidth="500" />
+                                                </ToolTip>
+                                            </TextBlock.ToolTip>
+                                        </TextBlock>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                         </DataGrid.Columns>
                     </DataGrid>
                 </Grid>

@@ -25,6 +25,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Automatic selection policy", TestAutomaticSelectionPolicyAsync),
     ("Application classification", TestApplicationClassificationAsync),
     ("Service classification", TestServiceClassificationAsync),
+    ("Online application guidance", TestOnlineApplicationGuidanceAsync),
     ("Selection state notification", TestSelectionStateNotificationAsync),
     ("Application after-flight choices", TestApplicationAfterFlightChoicesAsync),
     ("Saved selection preferences", TestSavedSelectionPreferencesAsync),
@@ -444,6 +445,21 @@ static Task TestApplicationClassificationAsync()
     Equal(WorkloadClassification.Optional, custom.Classification);
     Equal(WorkloadClassification.Recommended, processLasso.Classification);
     Equal(WorkloadClassification.Optional, pia.Classification);
+    Equal("Unrecognized background application. Review its name and purpose before choosing whether to close it.", unknown.Reason);
+    var unknownCandidate = new RunningAppCandidate
+    {
+        ProcessName = "UncataloguedTool",
+        DisplayName = "Uncatalogued Tool",
+        Impact = ImpactLevel.Unknown,
+        Reason = "No known direct MSFS impact.",
+        InstanceCount = 1,
+        MemoryMb = 10,
+        RestartCommand = "none:",
+        CanStop = true,
+        Classification = WorkloadClassification.Unknown
+    };
+    Equal("KEEP RUNNING", unknownCandidate.ClassificationLabel);
+    Equal("NO KNOWN", unknownCandidate.ImpactLabel);
     return Task.CompletedTask;
 }
 
@@ -458,6 +474,88 @@ static Task TestServiceClassificationAsync()
     Equal(WorkloadClassification.Optional, optional.Classification);
     Equal(WorkloadClassification.Protected, protectedService.Classification);
     Equal(WorkloadClassification.Unknown, unknown.Classification);
+    Equal("Unrecognized third-party service. Leave it running unless you know what it supports and can safely pause it.", unknown.Reason);
+    var unknownCandidate = new ServiceCandidate
+    {
+        ServiceName = "ThirdPartyMysteryService",
+        DisplayName = "Third-party Mystery Service",
+        Impact = ImpactLevel.Unknown,
+        Reason = "No known direct MSFS impact.",
+        CanStop = true,
+        Classification = WorkloadClassification.Unknown
+    };
+    Equal("KEEP RUNNING", unknownCandidate.ClassificationLabel);
+    Equal("NO KNOWN", unknownCandidate.ImpactLabel);
+    return Task.CompletedTask;
+}
+
+static Task TestOnlineApplicationGuidanceAsync()
+{
+    var review = new RunningAppCandidate
+    {
+        ProcessName = "Widgets", DisplayName = "Windows Widgets", Impact = ImpactLevel.Unknown,
+        Reason = "Local fallback", InstanceCount = 1, MemoryMb = 20, RestartCommand = "none:", CanStop = true,
+        Identity = new SoftwareIdentity(
+            SoftwareIdentityConfidence.Identified, "Test Publisher", "Windows Widgets", "1.0", "ABC123", true, "Local test")
+    };
+    var locallyProtected = new RunningAppCandidate
+    {
+        ProcessName = "MSFS_AutoFPS", DisplayName = "MSFS AutoFPS", Impact = ImpactLevel.Low,
+        Reason = "Protected locally", InstanceCount = 1, MemoryMb = 20, RestartCommand = "none:", CanStop = false,
+        Classification = WorkloadClassification.Protected
+    };
+    var catalogue = new OnlineApplicationCatalogue
+    {
+        SchemaVersion = 1,
+        Applications =
+        [
+            new OnlineApplicationGuidanceEntry
+            {
+                Names = ["Widgets.exe"], Guidance = "Recommend", Impact = "Low",
+                Publishers = ["Test Publisher"], Products = ["Windows Widgets"], Sha256 = ["ABC123"],
+                Why = "Optional during a flight.", MsfsImpact = "May use background resources."
+            },
+            new OnlineApplicationGuidanceEntry
+            {
+                Names = ["MSFS_AutoFPS"], Guidance = "Recommend", Impact = "High",
+                Why = "Remote override.", MsfsImpact = "Remote override."
+            }
+        ],
+        Services =
+        [
+            new OnlineServiceGuidanceEntry
+            {
+                Names = ["UpdaterService"], Guidance = "Recommend", Impact = "Medium",
+                Why = "Optional updater.", OperationalNote = "May use background resources."
+            }
+        ]
+    };
+
+    Equal(1, OnlineApplicationGuidancePolicy.Apply([review, locallyProtected], catalogue));
+    Equal(WorkloadClassification.Recommended, review.Classification);
+    Equal("RECOMMEND", review.ClassificationLabel);
+    Equal(ImpactLevel.Low, review.Impact);
+    Equal(SoftwareIdentityConfidence.Verified, review.Identity!.Confidence);
+    True(review.Identity.Source.Contains("SHA-256", StringComparison.Ordinal));
+    Equal(WorkloadClassification.Protected, locallyProtected.Classification);
+    True(!locallyProtected.CanStop);
+    var service = new ServiceCandidate
+    {
+        ServiceName = "UpdaterService", DisplayName = "Updater Service", Impact = ImpactLevel.Unknown,
+        Reason = "Local fallback", CanStop = true
+    };
+    Equal(1, OnlineApplicationGuidancePolicy.ApplyServices([service], catalogue));
+    Equal(WorkloadClassification.Recommended, service.Classification);
+    Equal(ImpactLevel.Medium, service.Impact);
+    Equal(SoftwareIdentityConfidence.Likely, service.Identity!.Confidence);
+
+    Equal(
+        @"C:\Program Files\Test App\service.exe",
+        ServiceExecutablePath.Resolve("\"C:\\Program Files\\Test App\\service.exe\" --service"));
+    var systemIdentity = SoftwareIdentityInspector.InspectFile(
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet", "dotnet.exe"));
+    True(systemIdentity.Sha256.Length == 64);
+    True(systemIdentity.TrustedSignature);
     return Task.CompletedTask;
 }
 

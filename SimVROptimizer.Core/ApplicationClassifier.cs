@@ -36,7 +36,7 @@ public static class ApplicationClassifier
 
         if (!hasKnownProfile)
             return new(WorkloadClassification.Unknown,
-                "Not in the verified application catalogue. Leave it running unless you recognize it and know it is unnecessary.");
+                "Unrecognized background application. Review its name and purpose before choosing whether to close it.");
 
         var canRestart = !restartCommand.StartsWith("none:", StringComparison.OrdinalIgnoreCase);
         if (RecommendedBackgroundApps.Contains(processName) && canRestart)

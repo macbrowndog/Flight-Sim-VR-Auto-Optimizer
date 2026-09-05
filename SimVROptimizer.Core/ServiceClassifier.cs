@@ -20,7 +20,7 @@ public static class ServiceClassifier
 
         if (!hasKnownProfile)
             return new(WorkloadClassification.Unknown,
-                "Not in the verified service catalogue. Stop it only if you understand its dependencies.");
+                "Unrecognized third-party service. Leave it running unless you know what it supports and can safely pause it.");
 
         if (RecommendedMarkers.Any(marker => serviceName.Contains(marker, StringComparison.OrdinalIgnoreCase)))
             return new(WorkloadClassification.Recommended,

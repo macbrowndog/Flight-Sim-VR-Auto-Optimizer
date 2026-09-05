@@ -13,6 +13,7 @@ public partial class MainWindow : Window
     private readonly bool _restoreLastSession;
     private readonly SessionCoordinator _coordinator;
     private readonly SystemScanner _scanner;
+    private readonly OnlineApplicationGuidanceClient _onlineApplicationGuidance = new();
     private readonly VrRuntimeLauncher _vrRuntimeLauncher;
     private readonly RecoveryShortcutService _recoveryShortcuts;
     private AppConfig _config = new();
@@ -431,7 +432,8 @@ public partial class MainWindow : Window
             VrRuntime = VrRuntimeCombo.SelectedItem is VrRuntimePreference runtime ? runtime : VrRuntimePreference.None,
             LaunchTimeoutSeconds = timeout,
             EnablePerformanceDashboard = DashboardEnabledCheck.IsChecked == true,
-            LogPerformanceCsv = DashboardCsvCheck.IsChecked == true
+            LogPerformanceCsv = DashboardCsvCheck.IsChecked == true,
+            EnableOnlineApplicationGuidance = OnlineGuidanceCheck.IsChecked == true
         },
         CustomApplications = ReadCustomApplications(),
         ApplicationSelections = new Dictionary<string, bool>(_config.ApplicationSelections, StringComparer.OrdinalIgnoreCase),
@@ -467,6 +469,7 @@ public partial class MainWindow : Window
         TimeoutBox.Text = _config.Options.LaunchTimeoutSeconds.ToString();
         DashboardEnabledCheck.IsChecked = _config.Options.EnablePerformanceDashboard;
         DashboardCsvCheck.IsChecked = _config.Options.LogPerformanceCsv;
+        OnlineGuidanceCheck.IsChecked = _config.Options.EnableOnlineApplicationGuidance;
         CustomKillBox.Text = string.Join(Environment.NewLine, _config.CustomApplications.Select(rule => rule.ProcessName));
         CustomRestartBox.Text = string.Join(Environment.NewLine, _config.CustomApplications
             .Where(rule => !string.IsNullOrWhiteSpace(rule.RestartExecutablePath))
@@ -595,6 +598,14 @@ public partial class MainWindow : Window
     }
 
     private async void ScanButton_Click(object sender, RoutedEventArgs e) => await ScanSystemAsync();
+
+    private async void OnlineGuidanceCheck_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_applyingConfig || !_uiReady) return;
+        MarkProfileDirty();
+        if (!_coordinator.IsRunning)
+            await ScanSystemAsync();
+    }
 
     private void SimulatorCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
@@ -931,6 +942,36 @@ public partial class MainWindow : Window
             var customApplications = ReadCustomApplications();
             _config.CustomApplications = customApplications;
             var result = await _scanner.ScanAsync(customApplications);
+            if (OnlineGuidanceCheck.IsChecked == true)
+            {
+                AppendStatus("Identity scan: reading local executable metadata, signatures, and hashes. No local details are uploaded.");
+                try
+                {
+                    var locallyIdentified = await Task.Run(() =>
+                        SoftwareIdentityInspector.Inspect(result.Applications, result.Services));
+                    var identityTotal = result.Applications.Count + result.Services.Count;
+                    AppendStatus($"Local identity scan: identified {locallyIdentified} of {identityTotal} application and service entries.");
+                    AppendStatus("Online guidance: downloading the privacy-safe application and service catalogue; no local names, hashes, or PC details are uploaded.");
+                    var catalogue = await _onlineApplicationGuidance.DownloadAsync();
+                    var matchedApplications = OnlineApplicationGuidancePolicy.Apply(result.Applications, catalogue);
+                    var matchedServices = OnlineApplicationGuidancePolicy.ApplyServices(result.Services, catalogue);
+                    AppendStatus($"Online guidance: matched {matchedApplications} application(s) and {matchedServices} service(s); unmatched items remain set to Keep Running.");
+                    var identities = result.Applications.Select(item => item.Identity)
+                        .Concat(result.Services.Select(item => item.Identity))
+                        .Where(identity => identity is not null)
+                        .Cast<SoftwareIdentity>()
+                        .ToList();
+                    AppendStatus(
+                        $"Identity confidence: {identities.Count(item => item.Confidence == SoftwareIdentityConfidence.Verified)} verified, " +
+                        $"{identities.Count(item => item.Confidence == SoftwareIdentityConfidence.Identified)} identified, " +
+                        $"{identities.Count(item => item.Confidence == SoftwareIdentityConfidence.Likely)} likely, " +
+                        $"{identityTotal - identities.Count(item => item.Confidence != SoftwareIdentityConfidence.Unidentified)} unidentified.");
+                }
+                catch (Exception exception)
+                {
+                    AppendStatus("Online guidance unavailable; unmatched applications and services remain set to Keep Running. " + exception.Message);
+                }
+            }
             _applyingScanResults = true;
             _applications = result.Applications;
             _services = result.Services;
@@ -943,16 +984,17 @@ public partial class MainWindow : Window
                 ?? result.Simulators.FirstOrDefault(item => item.Definition.Id.StartsWith("msfs", StringComparison.OrdinalIgnoreCase))
                 ?? result.Simulators.FirstOrDefault();
             ApplyModeSelection();
+            ApplySelectedFirstOrdering();
             _applyingScanResults = false;
             AppendStatus($"Scan complete: {result.Simulators.Count} simulator(s), {result.Applications.Count} app candidate(s), {result.Services.Count} relevant service(s).");
             var classifications = result.Applications
                 .GroupBy(item => item.Classification)
                 .ToDictionary(group => group.Key, group => group.Count());
-            AppendStatus($"Application guidance: {Count(WorkloadClassification.Recommended)} recommended, {Count(WorkloadClassification.Optional)} optional, {Count(WorkloadClassification.Protected)} protected, {Count(WorkloadClassification.Unknown)} unknown.");
+            AppendStatus($"Application guidance: {Count(WorkloadClassification.Recommended)} recommend, {Count(WorkloadClassification.Optional) + Count(WorkloadClassification.Unknown)} keep running, {Count(WorkloadClassification.Protected)} protected.");
             var serviceClassifications = result.Services
                 .GroupBy(item => item.Classification)
                 .ToDictionary(group => group.Key, group => group.Count());
-            AppendStatus($"Service guidance: {ServiceCount(WorkloadClassification.Recommended)} recommended, {ServiceCount(WorkloadClassification.Optional)} optional, {ServiceCount(WorkloadClassification.Protected)} protected, {ServiceCount(WorkloadClassification.Unknown)} unknown.");
+            AppendStatus($"Service guidance: {ServiceCount(WorkloadClassification.Recommended)} recommend, {ServiceCount(WorkloadClassification.Optional) + ServiceCount(WorkloadClassification.Unknown)} keep running, {ServiceCount(WorkloadClassification.Protected)} protected.");
             if (result.Simulators.Count == 0)
                 AppendStatus("No supported simulator installation was detected. Rescan after installing or repairing its launcher manifest.");
 
@@ -1038,8 +1080,8 @@ public partial class MainWindow : Window
             ? ContentCreatorCheck.IsChecked == true
                 ? $"Automatic {profile} optimization is active; streaming, capture, audio-routing, and creator helper tools will remain running."
                 : profile == OptimizationProfile.Aggressive
-                    ? "Aggressive mode selects only Recommended applications, includes approved services, and applies the stronger CPU/GPU defaults. Optional and Unknown applications remain unchecked unless you saved a choice."
-                    : "Standard mode selects only Recommended applications. Optional and Unknown applications remain unchecked unless you saved a choice."
+                    ? "Aggressive mode selects Recommend applications, includes approved services, and applies the stronger CPU/GPU defaults. Keep Running applications remain unchecked unless you saved a choice."
+                    : "Standard mode selects only Recommend applications. Keep Running applications remain unchecked unless you saved a choice."
             : profile == OptimizationProfile.Aggressive
                 ? "Choose applications and services manually before starting the session. All changed service states are restored on exit."
                 : "Choose applications manually before starting the session. Service control is available only in Aggressive profile.";
@@ -1121,8 +1163,23 @@ public partial class MainWindow : Window
                 return;
         }
 
+        ApplySelectedFirstOrdering();
         await SaveSelectionPreferencesAsync();
         MarkProfileDirty();
+    }
+
+    private void ApplySelectedFirstOrdering()
+    {
+        ApplySelectedFirstOrdering(AppsGrid);
+        ApplySelectedFirstOrdering(ServicesGrid);
+    }
+
+    private static void ApplySelectedFirstOrdering(System.Windows.Controls.DataGrid grid)
+    {
+        if (grid.ItemsSource is null) return;
+        grid.Items.SortDescriptions.Clear();
+        grid.Items.SortDescriptions.Add(new SortDescription(nameof(RunningAppCandidate.Selected), ListSortDirection.Descending));
+        grid.Items.Refresh();
     }
 
     private async void AfterFlightSelection_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e)

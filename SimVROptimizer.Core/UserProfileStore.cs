@@ -99,7 +99,8 @@ public static class UserProfileStore
         VrRuntime = source.VrRuntime,
         LaunchTimeoutSeconds = source.LaunchTimeoutSeconds,
         EnablePerformanceDashboard = source.EnablePerformanceDashboard,
-        LogPerformanceCsv = source.LogPerformanceCsv
+        LogPerformanceCsv = source.LogPerformanceCsv,
+        EnableOnlineApplicationGuidance = source.EnableOnlineApplicationGuidance
     };
 
     private static CustomApplicationRule Copy(CustomApplicationRule source) => new()
