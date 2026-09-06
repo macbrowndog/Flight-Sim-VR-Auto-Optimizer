@@ -27,14 +27,23 @@ public sealed class SimConnectFpsSource : IAsyncDisposable
     public void Start() => _worker ??= RunAsync(_cancellation.Token);
 
     public static bool TryCreate(Process simulator, FileLogger logger, out SimConnectFpsSource? source)
+        => TryCreate(simulator, logger, out source, out _);
+
+    public static bool TryCreate(Process simulator, FileLogger logger, out SimConnectFpsSource? source, out string unavailableReason)
     {
         source = null;
-        string? executablePath;
+        unavailableReason = "SimConnect runtime was not found in the simulator installation";
+        string? executablePath = null;
         try { executablePath = simulator.MainModule?.FileName; }
-        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception) { return false; }
-        var libraryPath = FindLibraryNearExecutable(executablePath);
+        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            unavailableReason = "the simulator executable could not be inspected for SimConnect";
+        }
+
+        var libraryPath = FindLibraryNearExecutable(executablePath) ?? FindLoadedLibrary(simulator);
         if (libraryPath is null) return false;
         source = new SimConnectFpsSource(libraryPath, logger);
+        unavailableReason = "";
         return true;
     }
 
@@ -48,6 +57,25 @@ public sealed class SimConnectFpsSource : IAsyncDisposable
             var candidate = Path.Combine(directory, name);
             if (File.Exists(candidate)) return candidate;
         }
+        return null;
+    }
+
+    private static string? FindLoadedLibrary(Process simulator)
+    {
+        try
+        {
+            foreach (ProcessModule module in simulator.Modules)
+            {
+                string? path;
+                try { path = module.FileName; }
+                catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception) { continue; }
+                var name = Path.GetFileName(path);
+                if (string.Equals(name, "SimConnect_internal.dll", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(name, "SimConnect.dll", StringComparison.OrdinalIgnoreCase))
+                    return path;
+            }
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException) { }
         return null;
     }
 
@@ -81,7 +109,7 @@ public sealed class SimConnectFpsSource : IAsyncDisposable
             var subscribeResult = subscribe(_connection, FrameEventId, "Frame");
             if (subscribeResult < 0)
             {
-                StatusChanged?.Invoke($"MSFS SimConnect FPS unavailable (HRESULT 0x{subscribeResult:X8})");
+                StatusChanged?.Invoke($"MONITORING ACTIVE — CPU/MainThread/memory data active; FPS unavailable — SimConnect frame subscription failed (HRESULT 0x{subscribeResult:X8})");
                 await _logger.WriteAsync($"SimConnect Frame subscription failed: HRESULT 0x{subscribeResult:X8}.", cancellationToken).ConfigureAwait(false);
                 return;
             }
@@ -113,7 +141,7 @@ public sealed class SimConnectFpsSource : IAsyncDisposable
         catch (OperationCanceledException) { }
         catch (Exception exception) when (exception is DllNotFoundException or EntryPointNotFoundException or BadImageFormatException or InvalidOperationException)
         {
-            StatusChanged?.Invoke("MSFS SimConnect FPS unavailable - " + exception.Message);
+            StatusChanged?.Invoke("MONITORING ACTIVE — CPU/MainThread/memory data active; FPS unavailable — SimConnect failed: " + exception.Message);
             await _logger.WriteAsync("SimConnect FPS source failed: " + exception.Message).ConfigureAwait(false);
         }
     }

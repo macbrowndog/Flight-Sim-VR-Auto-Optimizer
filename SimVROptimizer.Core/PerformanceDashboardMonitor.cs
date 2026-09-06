@@ -32,6 +32,7 @@ public sealed class PerformanceDashboardMonitor : IAsyncDisposable
     private int _stdoutDiagnosticLines;
     private int _simulatorProcessId;
     private string _simulatorProcessName = "";
+    private string _simConnectUnavailableReason = "SimConnect FPS source was not available";
 
     public PerformanceDashboardMonitor(AppPaths paths, FileLogger logger)
     {
@@ -57,6 +58,7 @@ public sealed class PerformanceDashboardMonitor : IAsyncDisposable
         _captureTimeoutReported = false;
         _captureFrameRows = 0;
         _stdoutDiagnosticLines = 0;
+        _simConnectUnavailableReason = "SimConnect FPS source was not available";
         while (_frameTimes.TryDequeue(out _)) { }
         _cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
@@ -69,7 +71,7 @@ public sealed class PerformanceDashboardMonitor : IAsyncDisposable
             await _logger.WriteAsync($"Performance CSV logging enabled: {path}", cancellationToken).ConfigureAwait(false);
         }
 
-        if (SimConnectFpsSource.TryCreate(_simulator, _logger, out var simConnect) && simConnect is not null)
+        if (SimConnectFpsSource.TryCreate(_simulator, _logger, out var simConnect, out var simConnectUnavailableReason) && simConnect is not null)
         {
             _simConnect = simConnect;
             _frameSourceStatus = "MSFS SimConnect FPS source starting";
@@ -80,6 +82,8 @@ public sealed class PerformanceDashboardMonitor : IAsyncDisposable
         }
         else
         {
+            _simConnectUnavailableReason = simConnectUnavailableReason;
+            await _logger.WriteAsync($"SimConnect FPS source unavailable: {_simConnectUnavailableReason}. Starting safe PresentMon fallback.", cancellationToken).ConfigureAwait(false);
             StartPresentMon(processId);
         }
         _samplingTask = SampleLoopAsync(_cancellation.Token);
@@ -137,7 +141,7 @@ public sealed class PerformanceDashboardMonitor : IAsyncDisposable
                     && now - _captureStartedUtc >= TimeSpan.FromSeconds(8))
                 {
                     _captureTimeoutReported = true;
-                    _frameSourceStatus = "FPS unavailable - capture stopped to protect simulator performance";
+                    _frameSourceStatus = BuildFpsUnavailableStatus($"{_simConnectUnavailableReason}; PresentMon found no simulator frames and was stopped safely");
                     await _logger.WriteAsync($"PresentMon produced no frame rows for PID {_simulatorProcessId} or process {_simulatorProcessName}.exe; capture stopped without using global ETW.", cancellationToken).ConfigureAwait(false);
                     await StopPresentMonCaptureAsync().ConfigureAwait(false);
                 }
@@ -252,7 +256,7 @@ public sealed class PerformanceDashboardMonitor : IAsyncDisposable
         var executable = FindPresentMon();
         if (executable is null)
         {
-            _frameSourceStatus = "FPS unavailable - PresentMon component not found";
+            _frameSourceStatus = BuildFpsUnavailableStatus($"{_simConnectUnavailableReason}; PresentMon component not found");
             return;
         }
         try
@@ -281,9 +285,9 @@ public sealed class PerformanceDashboardMonitor : IAsyncDisposable
             {
                 if (string.IsNullOrWhiteSpace(eventArgs.Data)) return;
                 if (eventArgs.Data.Contains("access denied", StringComparison.OrdinalIgnoreCase))
-                    _frameSourceStatus = "FPS unavailable - run as Administrator or join Performance Log Users";
+                    _frameSourceStatus = BuildFpsUnavailableStatus("PresentMon access denied; run as Administrator or join Performance Log Users");
                 else if (eventArgs.Data.StartsWith("error:", StringComparison.OrdinalIgnoreCase))
-                    _frameSourceStatus = "FPS unavailable - " + eventArgs.Data[6..].Trim();
+                    _frameSourceStatus = BuildFpsUnavailableStatus(eventArgs.Data[6..].Trim());
                 _ = _logger.WriteAsync("PresentMon: " + eventArgs.Data);
             };
             capture.Exited += (_, _) =>
@@ -291,8 +295,8 @@ public sealed class PerformanceDashboardMonitor : IAsyncDisposable
                 if (ReferenceEquals(_presentMon, capture)
                     && !_presentMonStopping
                     && _presentMonHeaders is null
-                    && !_frameSourceStatus.StartsWith("FPS unavailable", StringComparison.OrdinalIgnoreCase))
-                    _frameSourceStatus = "FPS unavailable - PresentMon ended before frame data was received";
+                    && !_frameSourceStatus.Contains("FPS unavailable", StringComparison.OrdinalIgnoreCase))
+                    _frameSourceStatus = BuildFpsUnavailableStatus("PresentMon ended before frame data was received");
             };
             _presentMon = capture;
             capture.Start();
@@ -305,9 +309,12 @@ public sealed class PerformanceDashboardMonitor : IAsyncDisposable
         }
         catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
         {
-            _frameSourceStatus = "FPS unavailable - " + exception.Message;
+            _frameSourceStatus = BuildFpsUnavailableStatus(exception.Message);
         }
     }
+
+    public static string BuildFpsUnavailableStatus(string detail) =>
+        $"MONITORING ACTIVE — CPU/MainThread/memory data active; FPS unavailable — {detail}";
 
     private string[]? _presentMonHeaders;
     private void PresentMon_OutputDataReceived(object sender, DataReceivedEventArgs eventArgs)

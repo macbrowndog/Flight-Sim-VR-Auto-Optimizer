@@ -19,9 +19,12 @@
                 <StackPanel>
                     <TextBlock Text="FLIGHT DECK / VR AUTO-OPTIMIZER" FontFamily="Consolas" FontSize="23" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" />
                     <Grid Margin="0,4,0,0">
-                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                         <TextBlock Text="SESSION CONTROL • PERFORMANCE MANAGEMENT • AUTOMATIC RECOVERY" FontFamily="Consolas" FontSize="11" Foreground="{StaticResource MutedTextBrush}" />
                         <TextBlock x:Name="HeaderVersionLabel" Grid.Column="2" Text="ANDREW BROWN © 2026 • VERSION" FontFamily="Consolas" FontSize="10" Foreground="{StaticResource CyanBrush}" Margin="18,0,0,0" />
+                        <Button x:Name="CheckUpdateButton" Grid.Column="3" Content="CHECK UPDATE" Click="CheckUpdateButton_Click"
+                                FontSize="10" Padding="9,3" Margin="12,-3,0,-3" Background="#233137" Foreground="{StaticResource AccentBrush}"
+                                ToolTip="Manually check the latest public VR Auto-Optimizer release on GitHub. No check runs automatically." />
                     </Grid>
                 </StackPanel>
                 <Border Grid.Column="1" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Background="#0A1012" Padding="14,8" Margin="10,0">
@@ -237,6 +240,9 @@
                             <TextBlock Text="PERFORMANCE PANEL" Style="{StaticResource InstrumentLabel}" Margin="0,0,0,9"/>
                             <TextBlock Text="OPTIMIZATION PROFILE" Style="{StaticResource InstrumentLabel}" Margin="0,3,0,6" />
                             <ComboBox x:Name="ProfileCombo" Height="34" SelectionChanged="ProfileCombo_SelectionChanged" />
+                            <Button Content="READ DISPLAY / DLSS SETTINGS" Click="DisplaySettingsButton_Click" Margin="0,10,0,3"
+                                    Padding="10,7" Background="#233137" Foreground="{StaticResource CyanBrush}"
+                                    ToolTip="Shows the saved MSFS 2D/VR TAA or DLSS mode, the NVIDIA App DLSS override model presets, and the loaded DLSS library version." />
                             <CheckBox x:Name="PowerPlanCheck" Content="POWER PLAN / CPU-aware temporary" IsChecked="True"
                                       Checked="ProfileSetting_Changed" Unchecked="ProfileSetting_Changed"
                                       ToolTip="Uses Windows Balanced on AMD X3D processors for cache-aware CCD scheduling. Other supported processors use a temporary Ultimate Performance plan. The original plan is restored after the flight." />
@@ -250,9 +256,9 @@
                             <CheckBox x:Name="OpenXrTurboCheck" Content="OPENXR / Turbo frame pacing"
                                       Checked="ProfileSetting_Changed" Unchecked="ProfileSetting_Changed"
                                       ToolTip="Uses the VR Optimizer's bundled OpenXR layer; OpenXR Toolkit is not required. Temporarily pipelines one frame and removes the layer registration after the session. May conflict with motion reprojection or some runtimes." />
-                            <CheckBox x:Name="DashboardEnabledCheck" Content="DASHBOARD SIMCONNECT INFO / monitor session" IsChecked="True"
+                            <CheckBox x:Name="DashboardEnabledCheck" Content="DASHBOARD MONITORING / FPS when available" IsChecked="True"
                                       Checked="ProfileSetting_Changed" Unchecked="ProfileSetting_Changed"
-                                      ToolTip="Turns the desktop and MSFS VR dashboard telemetry feed on or off. When enabled, SimConnect supplies MSFS FPS and frame timing while CPU, MainThread and memory readings are monitored locally." />
+                                      ToolTip="Turns desktop and MSFS VR dashboard monitoring on or off. CPU, MainThread and memory are monitored locally. For MSFS, FPS uses SimConnect when available and a safe PresentMon fallback; FPS can be unavailable while the remaining dashboard monitoring stays active." />
                             <CheckBox x:Name="ContentCreatorCheck" Content="CREATOR MODE / keep capture tools online"
                                       Checked="ContentCreatorCheck_Changed" Unchecked="ContentCreatorCheck_Changed"
                                       ToolTip="Protects OBS, Streamlabs, Twitch Studio, Stream Deck, NVIDIA Broadcast, Voicemeeter, Elgato, XSplit, vMix and related helper services in Automatic mode." />

@@ -26,6 +26,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Application classification", TestApplicationClassificationAsync),
     ("Service classification", TestServiceClassificationAsync),
     ("Online application guidance", TestOnlineApplicationGuidanceAsync),
+    ("Application update checker", TestApplicationUpdateCheckerAsync),
     ("Selection state notification", TestSelectionStateNotificationAsync),
     ("Application after-flight choices", TestApplicationAfterFlightChoicesAsync),
     ("Saved selection preferences", TestSavedSelectionPreferencesAsync),
@@ -39,6 +40,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("VR runtime shutdown policy", TestVrRuntimeShutdownPolicyAsync),
     ("Xbox post-flight cleanup", TestXboxSessionCleanupAsync),
     ("Performance telemetry calculations", TestPerformanceTelemetryAsync),
+    ("MSFS display settings parser", TestMsfsDisplaySettingsParserAsync),
+    ("NVIDIA DLSS model preset mapping", TestNvidiaDlssPresetMappingAsync),
     ("Performance monitor sampling", TestPerformanceMonitorSamplingAsync),
     ("VR toolbar telemetry bridge", TestToolbarTelemetryBridgeAsync),
     ("VR toolbar package installer", TestToolbarPackageInstallerAsync),
@@ -559,6 +562,38 @@ static Task TestOnlineApplicationGuidanceAsync()
     return Task.CompletedTask;
 }
 
+static async Task TestApplicationUpdateCheckerAsync()
+{
+    var requests = 0;
+    using var client = new HttpClient(new StubHttpMessageHandler(request =>
+    {
+        requests++;
+        True(request.Headers.UserAgent.Any(item => item.Product?.Name == "VR-Auto-Optimizer"));
+        True(request.Headers.Accept.Any(item => item.MediaType == "application/vnd.github+json"));
+        True(request.Headers.Contains("X-GitHub-Api-Version"));
+        return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                """{"tag_name":"v2.3.0","name":"VR Auto-Optimizer 2.3.0","html_url":"https://github.com/macbrowndog/Flight-Sim-VR-Auto-Optimizer/releases/tag/v2.3.0"}""",
+                Encoding.UTF8,
+                "application/json")
+        };
+    }));
+    var checker = new ApplicationUpdateChecker(client);
+
+    var available = await checker.CheckAsync(new Version(2, 2, 0, 0));
+    True(available.IsUpdateAvailable);
+    Equal(new Version(2, 2, 0), available.CurrentVersion);
+    Equal(new Version(2, 3, 0), available.LatestVersion);
+    Equal("VR Auto-Optimizer 2.3.0", available.ReleaseName);
+    Equal("github.com", available.ReleaseUri.Host);
+
+    var current = await checker.CheckAsync(new Version(2, 3, 0, 0));
+    True(!current.IsUpdateAvailable);
+    Equal(2, requests);
+    Equal(new Version(2, 3, 1), ApplicationUpdateChecker.ParseReleaseVersion("v2.3.1-beta.1"));
+}
+
 static Task TestOptimizationProfilesAsync()
 {
     var options = new OptimizerOptions();
@@ -947,6 +982,11 @@ static Task TestVrRuntimeShutdownPolicyAsync()
 
 static Task TestPerformanceTelemetryAsync()
 {
+    var unavailableStatus = PerformanceDashboardMonitor.BuildFpsUnavailableStatus("test source unavailable");
+    True(unavailableStatus.Contains("MONITORING ACTIVE", StringComparison.Ordinal));
+    True(unavailableStatus.Contains("CPU/MainThread/memory data active", StringComparison.Ordinal));
+    True(unavailableStatus.Contains("FPS unavailable", StringComparison.Ordinal));
+
     var values = PerformanceDashboardMonitor.ParseCsv("game.exe,42,\"Hardware: Independent Flip\",16.667");
     Equal(4, values.Length);
     Equal("Hardware: Independent Flip", values[2]);
@@ -989,6 +1029,49 @@ static Task TestPerformanceTelemetryAsync()
     return Task.CompletedTask;
 }
 
+static Task TestMsfsDisplaySettingsParserAsync()
+{
+    const string config = """
+        Version 66
+        {Video
+            AntiAliasing DLSS
+            DLSSMode QUALITY
+            AntiAliasingVR TAA
+            DLSSModeVR AUTO
+        }
+        {Graphics
+            Version 2.1.0
+            Preset Ultra
+        }
+        {GraphicsVR
+            Version 2.1.0
+            Preset VRMedium
+        }
+        """;
+    var settings = MsfsDisplaySettingsReader.Parse(config, @"C:\MSFS\UserCfg.opt");
+    Equal("66", settings.UserConfigVersion);
+    Equal("DLSS", settings.Desktop.AntiAliasing);
+    Equal("QUALITY", settings.Desktop.DlssMode);
+    Equal("2.1.0", settings.Desktop.GraphicsVersion);
+    Equal("Ultra", settings.Desktop.Preset);
+    Equal("TAA", settings.Vr.AntiAliasing);
+    Equal("AUTO", settings.Vr.DlssMode);
+    Equal("VR Medium", settings.Vr.Preset);
+    return Task.CompletedTask;
+}
+
+static Task TestNvidiaDlssPresetMappingAsync()
+{
+    Equal("Use 3D app setting", NvidiaDlssSettingsReader.FormatPreset(0, 11));
+    Equal("Recommended", NvidiaDlssSettingsReader.FormatPreset(1, 0));
+    Equal("Recommended (Default)", NvidiaDlssSettingsReader.FormatPreset(1, 0x00FFFFFE));
+    Equal("Recommended (Latest)", NvidiaDlssSettingsReader.FormatPreset(1, 0x00FFFFFF));
+    Equal("Preset A", NvidiaDlssSettingsReader.FormatPreset(1, 1));
+    Equal("Preset K", NvidiaDlssSettingsReader.FormatPreset(1, 11));
+    Equal("Preset Z", NvidiaDlssSettingsReader.FormatPreset(1, 26));
+    return Task.CompletedTask;
+}
+
 static async Task TestPerformanceMonitorSamplingAsync()
 {
     var directory = Path.Combine(AppContext.BaseDirectory, "test-data", Guid.NewGuid().ToString("N"));
@@ -1024,31 +1107,18 @@ static async Task TestLogRotationAsync()
 
 static async Task TestXboxSessionCleanupAsync()
 {
-    var running = true;
-    var commands = new FakeCommandRunner
-    {
-        Handler = (file, args) =>
-        {
-            if (file != "sc.exe") return Ok();
-            if (args.FirstOrDefault() == "query") return running ? Ok("STATE : 4 RUNNING") : Ok("STATE : 1 STOPPED");
-            if (args.FirstOrDefault() == "stop") { running = false; return Ok(); }
-            return Ok();
-        }
-    };
     var directory = Path.Combine(AppContext.BaseDirectory, "test-data", Guid.NewGuid().ToString("N"));
     var messages = new List<string>();
     var cleanup = new XboxSessionCleanup(
-        commands,
         new FileLogger(Path.Combine(directory, "xbox-cleanup.log")),
-        applicationNames: [],
-        serviceNames: ["GamingServices"]);
+        applicationNames: []);
     cleanup.StatusChanged += messages.Add;
 
     await cleanup.CleanupAsync();
 
-    True(commands.Calls.Any(call => call.File == "sc.exe" && string.Join(" ", call.Args) == "stop GamingServices"));
-    True(messages.Any(message => message.Contains("Stopped Xbox service GamingServices", StringComparison.Ordinal)));
-    True(messages.Any(message => message.Contains("startup settings were not changed", StringComparison.Ordinal)));
+    True(!XboxSessionCleanup.DefaultApplicationNames.Contains("GamingServices", StringComparer.OrdinalIgnoreCase));
+    True(!XboxSessionCleanup.DefaultApplicationNames.Contains("GamingServicesNet", StringComparer.OrdinalIgnoreCase));
+    True(messages.Any(message => message.Contains("services were left untouched", StringComparison.Ordinal)));
 }
 
 static async Task TestPendingLaunchRoundtripAsync()
@@ -1388,6 +1458,13 @@ internal sealed class FakeCommandRunner : ICommandRunner
         Calls.Add((fileName, args));
         return Task.FromResult(Handler(fileName, args));
     }
+}
+
+internal sealed class StubHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> handler) : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken) => Task.FromResult(handler(request));
 }
 
 internal sealed class FakeApplicationRestarter : IApplicationRestarter

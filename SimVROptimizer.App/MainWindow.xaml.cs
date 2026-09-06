@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Media;
@@ -14,6 +15,7 @@ public partial class MainWindow : Window
     private readonly SessionCoordinator _coordinator;
     private readonly SystemScanner _scanner;
     private readonly OnlineApplicationGuidanceClient _onlineApplicationGuidance = new();
+    private readonly ApplicationUpdateChecker _updateChecker = new();
     private readonly VrRuntimeLauncher _vrRuntimeLauncher;
     private readonly RecoveryShortcutService _recoveryShortcuts;
     private AppConfig _config = new();
@@ -53,7 +55,7 @@ public partial class MainWindow : Window
             optimizer,
             new SimulatorLauncher(logger),
             _vrRuntimeLauncher,
-            new XboxSessionCleanup(commands, logger));
+            new XboxSessionCleanup(logger));
         _scanner = new SystemScanner(commands);
         _recoveryShortcuts = new RecoveryShortcutService();
         _coordinator.StatusChanged += AppendStatus;
@@ -201,6 +203,27 @@ public partial class MainWindow : Window
         _sessionCancellation = new CancellationTokenSource();
         _sessionTask = RunSessionAsync(simulator, _config.Options, _sessionCancellation.Token);
         await _sessionTask;
+    }
+
+    private void DisplaySettingsButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (SimulatorCombo.SelectedItem is not DetectedSimulator detectedSimulator
+            || !detectedSimulator.Definition.Id.StartsWith("msfs", StringComparison.OrdinalIgnoreCase))
+        {
+            MessageBox.Show("Select Microsoft Flight Simulator 2020 or 2024 first.", "MSFS display settings", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var settings = MsfsDisplaySettingsReader.ReadForSimulator(detectedSimulator.Definition.Id);
+        if (settings is null)
+        {
+            MessageBox.Show("The selected simulator's UserCfg.opt could not be found or read. Start MSFS once and close it normally so the settings file is written.",
+                "MSFS display settings", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var nvidia = NvidiaDlssSettingsReader.Read(detectedSimulator.Definition.Id);
+        new DisplaySettingsWindow(settings, nvidia) { Owner = this }.ShowDialog();
     }
 
     private IReadOnlyList<PreflightItem> BuildPlannedActionItems(SimulatorDefinition simulator)
@@ -598,6 +621,55 @@ public partial class MainWindow : Window
     }
 
     private async void ScanButton_Click(object sender, RoutedEventArgs e) => await ScanSystemAsync();
+
+    private async void CheckUpdateButton_Click(object sender, RoutedEventArgs e)
+    {
+        CheckUpdateButton.IsEnabled = false;
+        CheckUpdateButton.Content = "CHECKING…";
+        try
+        {
+            var installed = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version
+                ?? new Version(0, 0, 0);
+            var update = await _updateChecker.CheckAsync(installed);
+            if (update.IsUpdateAvailable)
+            {
+                AppendStatus($"Update available: VR Auto-Optimizer {update.LatestVersion} (installed {update.CurrentVersion}).");
+                var answer = MessageBox.Show(
+                    $"VR Auto-Optimizer {update.LatestVersion} is available.\n\n" +
+                    $"Installed version: {update.CurrentVersion}\n" +
+                    $"Latest release: {update.ReleaseName}\n\n" +
+                    "Open the official GitHub release page?",
+                    "Update available",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Information);
+                if (answer == MessageBoxResult.Yes)
+                    Process.Start(new ProcessStartInfo(update.ReleaseUri.AbsoluteUri) { UseShellExecute = true });
+            }
+            else
+            {
+                AppendStatus($"Update check complete: version {update.CurrentVersion} is current.");
+                MessageBox.Show(
+                    $"VR Auto-Optimizer is up to date.\n\nInstalled version: {update.CurrentVersion}\nLatest release: {update.LatestVersion}",
+                    "No update available",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+            }
+        }
+        catch (Exception exception)
+        {
+            AppendStatus("Update check unavailable: " + exception.Message);
+            MessageBox.Show(
+                "The latest version could not be checked. Confirm that this PC can access GitHub and try again.\n\n" + exception.Message,
+                "Update check unavailable",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+        finally
+        {
+            CheckUpdateButton.Content = "CHECK UPDATE";
+            CheckUpdateButton.IsEnabled = true;
+        }
+    }
 
     private async void OnlineGuidanceCheck_Changed(object sender, RoutedEventArgs e)
     {

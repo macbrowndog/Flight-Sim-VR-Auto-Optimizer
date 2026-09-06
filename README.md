@@ -30,12 +30,14 @@ It scans the local PC, explains the likely MSFS impact of running applications a
 - CPU vendor/model and topology detection with AMD X3D-safe scheduling, Windows Balanced power handling, and Game Bar protection
 - Selectable simulator priority and optional Intel hybrid performance-core CPU Sets
 - CPU-aware power handling: Windows Balanced for AMD X3D, temporary Ultimate Performance for other supported CPUs, plus NVIDIA persistence control
-- Automatic post-flight Xbox application and trigger-start service cleanup for MSFS, without changing service startup configuration
+- Automatic post-flight Xbox/Game Bar interface cleanup for MSFS while leaving Gaming Services, authentication, game-save and networking services available for the next launch
 - Standard profile includes DNS flush, High process priority, and vendor-aware CPU Sets; service stopping is reserved for Aggressive mode
 - Aggressive profile adds reversible Game Bar/Game DVR, fullscreen-optimization, timer-resolution, process power-throttling, standby-memory clearing, and approved service control
 - Optional one-time standby-memory clearing in Aggressive mode
 - Clear **Recommend**, **Keep Running**, and **Protected** application and service guidance; automatic selection uses only verified recommended items
 - Optional online guidance catalogue with local executable identity checks using file metadata, publisher, product, Authenticode signature, and SHA-256
+- Manual **Check Update** control that compares the installed version with the latest public GitHub release and offers to open the official release page
+- Read-only display-settings dialog showing saved MSFS desktop/VR TAA or DLSS mode, NVIDIA App DLSS override model presets for Frame Generation, Super Resolution and Ray Reconstruction, plus the loaded DLSS library version
 - Protected Steam, Xbox/MSFS, VR/OpenXR, networking, security, and flight-control components
 - Content Creator Mode for OBS, Streamlabs, Stream Deck, NVIDIA Broadcast, Voicemeeter, Elgato, and other capture tools
 - Aviation instrument-themed dark interface with live session status and rotating logs
@@ -114,7 +116,7 @@ Standard profile limits Automatic application selection to high- and medium-impa
 
 **Administrator mode is required for Aggressive operation.** This includes stopping services such as SysMain, Print Spooler, iCloud, CCleaner and updater services. It also includes protected registry changes, timer and memory operations, network tuning, and reliable restoration. If the title bar does not show administrator access, close the app and restart it using **Run as administrator** before beginning an Aggressive session.
 
-The Dashboard's CPU summary, simulator thread, and memory readings work for standard users. AMD logical-processor data is grouped by Windows CPU topology into CCD summaries; other processors show an overall average and hottest logical processor. MSFS 2024 FPS and frame-time readings use its installed SimConnect runtime and visual-frame data; other supported simulators can fall back to the included Intel PresentMon component. When frame access is unavailable, the dashboard reports this explicitly and continues collecting the remaining metrics. Simulator FPS is an application presentation rate and may differ from headset-delivered FPS when a VR runtime uses reprojection.
+The Dashboard's CPU summary, simulator thread, and memory readings work for standard users. AMD logical-processor data is grouped by Windows CPU topology into CCD summaries; other processors show an overall average and hottest logical processor. MSFS 2024 FPS and frame-time readings use its installed SimConnect runtime and visual-frame data; other supported simulators can fall back to the included Intel PresentMon component. The Dashboard Monitoring option enables the telemetry session, but FPS remains dependent on one of those frame sources. When frame access is unavailable, the dashboard now identifies monitoring as active, explains why FPS is unavailable, and continues collecting CPU, MainThread, and memory metrics. Simulator FPS is an application presentation rate and may differ from headset-delivered FPS when a VR runtime uses reprojection.
 
 Persistent Aggressive changes are written to the recovery journal before they are applied and restored in reverse order after the simulator exits. The 0.5 ms timer request is released and simulator power-throttling state is restored. DNS flushing and standby-list clearing are one-time operations rather than persistent settings; their caches naturally repopulate. NVIDIA persistence is supported and restored, but the driver-profile “Prefer maximum performance” setting is not forced because reliable per-profile restoration requires a dedicated NVIDIA NVAPI integration.
 
@@ -166,6 +168,15 @@ The test runner has no third-party test framework dependency. It covers output p
 
 Licensed under the [MIT License](LICENSE).
 
+## Release notes — 2.2.1
+
+- Added a manual **Check Update** control that compares the installed version with the latest public GitHub release and only opens GitHub after user approval.
+- Added a read-only **MSFS Display & NVIDIA DLSS Settings** window for saved desktop/VR rendering modes, NVIDIA App model-preset overrides, and the loaded DLSS library version.
+- Improved dashboard source handling by checking loaded SimConnect libraries before using the safe PresentMon fallback.
+- Clarified degraded telemetry states so the dashboard explicitly shows when CPU, MainThread, and memory monitoring remain active while FPS is unavailable.
+- Changed post-flight Xbox cleanup to close only Xbox/Game Bar interface processes, leaving Gaming Services, authentication, game-save, and networking services available for the next MSFS launch.
+- Expanded automated coverage for update checking, display-settings parsing, DLSS preset mapping, FPS status reporting, and Xbox cleanup safety.
+
 ## Release notes — 2.2.0
 
 - Added opt-in online guidance for both running applications and services using a remotely maintained catalogue; the complete catalogue is downloaded and no local process names, service names, paths, hashes, or PC details are uploaded.
@@ -203,7 +214,7 @@ Licensed under the [MIT License](LICENSE).
 - Strengthened recovery with a durable transaction journal, verified per-item restoration report, automatic interrupted-session recovery, log rotation, and recovery shortcuts.
 - Changed post-flight application handling so selected applications remain closed, while OneDrive is explicitly and safely restored to the normal desktop session.
 - Added AMD X3D-aware Windows Balanced handling, post-launch power-plan verification, Process Lasso controller shutdown before plan selection, scheduler-safe CPU behavior, and Xbox Game Bar protection.
-- Added automatic post-flight Xbox process/service cleanup without changing startup configuration, reducing stale Xbox state before the next MSFS launch.
+- Added automatic post-flight Xbox interface cleanup. Gaming Services and Xbox authentication/network services now remain untouched so online features are ready for the next MSFS launch.
 - Improved Intel hybrid CPU Set selection and verification, processor-group support, process priority, power-throttling restoration, and AMD CCD-aware monitoring.
 - Added graceful SteamVR shutdown so Bluetooth base stations can enter standby, plus safer Pimax, Virtual Desktop, OpenXR, flight-control, security, and simulator-companion protection.
 - Added MSFS 2024 `-FastLaunch`, ten simulator configurations including standalone Korea. IL-2 Series, two optimization profiles, granular controls, five-stage progress, Content Creator Mode, and configurable VR runtime launching.
