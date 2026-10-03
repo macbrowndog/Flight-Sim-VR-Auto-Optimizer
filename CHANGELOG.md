@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Preserved current application and service checkbox choices across restarts without silently reapplying an older active-profile snapshot; **Load**, **Save Changes** and **Revert** retain their explicit profile behavior.
+- Added an **Invert Selection** action for applications that reverses selectable choices while leaving protected and required workloads unchanged.
+- Added a measured **CPU Now** column using a short local per-process sample; retained the curated **Impact** guidance and existing memory reading because GPU-Z reports total GPU load rather than reliable per-application GPU usage.
+- Blocked session startup when the selected simulator is already running, preventing partial optimization and duplicate launches.
+- Added bounded DCS launcher-to-simulator PID handoff for `DCS.exe` and `DCS_mt.exe`, including CPU-tuning and dashboard-monitor transfer before restoration.
+- Expanded automated coverage to 65 passing tests.
+
 ## 2.4.2 — 2026-10-03
 
 - Normalized DLSS file-version formatting to full-stop separators and preserved all four components, for example `DLSS v310.9.1.0` instead of `DLSS v310,9,1,0`.

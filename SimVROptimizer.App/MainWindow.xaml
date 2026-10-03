@@ -72,7 +72,11 @@
                 <Grid Background="#0C1214">
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                     <Border Background="#151D20" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="12,8">
-                        <TextBlock Text="APP LOAD CONTROL  /  RECOMMEND = safe to close  ·  KEEP RUNNING = review first  ·  PROTECTED = locked" FontFamily="Consolas" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="APP LOAD CONTROL  /  RECOMMEND = safe to close  ·  KEEP RUNNING = review first  ·  PROTECTED = locked" FontFamily="Consolas" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,0,12,0" />
+                            <Button Grid.Column="1" Content="INVERT SELECTION" Click="InvertApplicationsButton_Click" Padding="12,4" ToolTip="Reverse the checked state of selectable applications. Protected and required applications remain unchanged." />
+                        </Grid>
                     </Border>
                     <DataGrid x:Name="AppsGrid" Grid.Row="1" AutoGenerateColumns="False" Background="#0C1214" Foreground="{StaticResource TextBrush}"
                               RowBackground="#0C1214" AlternatingRowBackground="#111A1D" GridLinesVisibility="Horizontal" BorderThickness="0">
@@ -106,6 +110,7 @@
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
                             <DataGridTextColumn Header="IMPACT" Binding="{Binding ImpactLabel}" Width="75" IsReadOnly="True" />
+                            <DataGridTextColumn Header="CPU NOW" Binding="{Binding CpuPercentLabel}" Width="78" IsReadOnly="True" />
                             <DataGridTextColumn Header="MEM MB" Binding="{Binding MemoryMb}" Width="78" IsReadOnly="True" />
                             <DataGridTemplateColumn Header="AFTER FLIGHT" Width="125">
                                 <DataGridTemplateColumn.CellTemplate>

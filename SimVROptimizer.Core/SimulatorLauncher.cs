@@ -14,6 +14,23 @@ public sealed class SimulatorLauncher
     public SimulatorLauncher(FileLogger logger) => _logger = logger;
     public event Action<string>? StatusChanged;
 
+    public static bool IsSimulatorRunning(SimulatorDefinition simulator)
+    {
+        foreach (var processName in simulator.ProcessNames)
+        {
+            var processes = Process.GetProcessesByName(processName);
+            try
+            {
+                if (processes.Length > 0) return true;
+            }
+            finally
+            {
+                foreach (var process in processes) process.Dispose();
+            }
+        }
+        return false;
+    }
+
     public async Task<Process?> LaunchAndWaitAsync(
         SimulatorDefinition simulator,
         OptimizerOptions options,
@@ -22,6 +39,8 @@ public sealed class SimulatorLauncher
         var existingProcesses = simulator.ProcessNames.SelectMany(Process.GetProcessesByName).ToArray();
         var existingPids = existingProcesses.Select(process => process.Id).ToHashSet();
         foreach (var existingProcess in existingProcesses) existingProcess.Dispose();
+        if (existingPids.Count > 0)
+            throw new InvalidOperationException($"{simulator.Name} is already running. Close it before starting the optimizer session.");
         var launchedAfterUtc = DateTime.UtcNow.AddSeconds(-2);
 
         var plan = CreateLaunchPlan(simulator, options);
@@ -52,9 +71,7 @@ public sealed class SimulatorLauncher
                             await ReportAsync($"Detected new simulator process PID {process.Id}.", cancellationToken);
                             try
                             {
-                                var scope = _cpuOptimizer.Apply(process, options);
-                                _cpuScopes[process.Id] = scope;
-                                await ReportAsync(scope.Summary, cancellationToken);
+                                await ApplyProcessTuningAsync(process, options, cancellationToken);
                             }
                             catch (Exception exception) when (exception is Win32Exception or InvalidOperationException or EntryPointNotFoundException)
                             {
@@ -77,6 +94,62 @@ public sealed class SimulatorLauncher
         }
     }
 
+    public async Task<Process?> WaitForReplacementAsync(
+        SimulatorDefinition simulator,
+        OptimizerOptions options,
+        IReadOnlySet<int> observedProcessIds,
+        DateTime sessionStartedUtc,
+        TimeSpan gracePeriod,
+        CancellationToken cancellationToken)
+    {
+        if (!SimulatorProcessHandoffPolicy.Supports(simulator)) return null;
+        gracePeriod = gracePeriod <= TimeSpan.Zero ? TimeSpan.FromSeconds(20) : gracePeriod;
+        var deadline = DateTime.UtcNow + gracePeriod;
+        await ReportAsync($"{simulator.Name} launch process exited; waiting up to {gracePeriod.TotalSeconds:0} seconds for the replacement simulator process.", cancellationToken);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach (var processName in simulator.ProcessNames)
+            {
+                var processes = Process.GetProcessesByName(processName);
+                foreach (var process in processes)
+                {
+                    var keep = false;
+                    try
+                    {
+                        var startedUtc = process.StartTime.ToUniversalTime();
+                        if (!SimulatorProcessHandoffPolicy.IsEligible(simulator, process.ProcessName, process.Id,
+                                startedUtc, observedProcessIds, sessionStartedUtc)) continue;
+                        try
+                        {
+                            await ApplyProcessTuningAsync(process, options, cancellationToken);
+                        }
+                        catch (Exception exception) when (exception is Win32Exception or InvalidOperationException or EntryPointNotFoundException)
+                        {
+                            await ReportAsync($"CPU optimization was skipped for replacement DCS PID {process.Id}: {exception.Message}", cancellationToken);
+                        }
+                        await ReportAsync($"DCS process handoff detected: now monitoring {process.ProcessName} PID {process.Id}.", cancellationToken);
+                        keep = true;
+                        return process;
+                    }
+                    catch (Exception exception) when (exception is Win32Exception or InvalidOperationException)
+                    {
+                        // Process exited while it was being inspected.
+                    }
+                    finally
+                    {
+                        if (!keep) process.Dispose();
+                    }
+                }
+            }
+            await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken).ConfigureAwait(false);
+        }
+
+        await ReportAsync("No replacement DCS process appeared during the handoff window.", CancellationToken.None);
+        return null;
+    }
+
     public async Task RestoreProcessTuningAsync(Process process, CancellationToken cancellationToken = default)
     {
         if (!_cpuScopes.Remove(process.Id, out var scope)) return;
@@ -89,6 +162,13 @@ public sealed class SimulatorLauncher
         {
             await ReportAsync($"Could not restore simulator CPU settings: {exception.Message}", cancellationToken);
         }
+    }
+
+    private async Task ApplyProcessTuningAsync(Process process, OptimizerOptions options, CancellationToken cancellationToken)
+    {
+        var scope = _cpuOptimizer.Apply(process, options);
+        _cpuScopes[process.Id] = scope;
+        await ReportAsync(scope.Summary, cancellationToken);
     }
 
     public static SimulatorLaunchPlan CreateLaunchPlan(SimulatorDefinition simulator, OptimizerOptions options)

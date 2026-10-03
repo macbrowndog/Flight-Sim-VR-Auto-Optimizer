@@ -228,6 +228,7 @@ public sealed class RunningAppCandidate : INotifyPropertyChanged
     ];
     private bool _selected;
     private ApplicationAfterFlightAction _afterFlightAction;
+    private double? _cpuPercent;
 
     public required string ProcessName { get; init; }
     public required string DisplayName { get; init; }
@@ -235,6 +236,18 @@ public sealed class RunningAppCandidate : INotifyPropertyChanged
     public required string Reason { get; set; }
     public required int InstanceCount { get; init; }
     public required long MemoryMb { get; init; }
+    public double? CpuPercent
+    {
+        get => _cpuPercent;
+        set
+        {
+            if (_cpuPercent == value) return;
+            _cpuPercent = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CpuPercentLabel));
+        }
+    }
+    public string CpuPercentLabel => CpuPercent.HasValue ? $"{CpuPercent.Value:0.0}%" : "—";
     public string? ExecutablePath { get; init; }
     public SoftwareIdentity? Identity { get; set; }
     public string IdentityLabel => Identity?.Label ?? "UNIDENTIFIED";
@@ -373,6 +386,17 @@ public static class SessionSelectionPolicy
     {
         foreach (var application in applications) application.Selected = application.SelectionRequired;
         foreach (var service in services) service.Selected = false;
+    }
+
+    public static int InvertApplications(IEnumerable<RunningAppCandidate> applications)
+    {
+        var changed = 0;
+        foreach (var application in applications.Where(item => item.CanChangeSelection))
+        {
+            application.Selected = !application.Selected;
+            changed++;
+        }
+        return changed;
     }
 
     public static void ApplySaved(

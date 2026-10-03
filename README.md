@@ -2,7 +2,7 @@
 
 VR Auto-Optimizer is a .NET 8 WPF application for launching selected Windows flight simulators with temporary, recoverable system adjustments.
 
-It scans the local PC, explains the likely MSFS impact of running applications and services, applies selected performance settings, launches the simulator, monitors the exact new simulator process, and restores recorded system state when the flight ends.
+It scans the local PC, explains the likely MSFS impact of running applications and services, applies selected performance settings, launches the simulator, monitors the exact new simulator process—including DCS launcher process handoff—and restores recorded system state when the flight ends.
 
 > [!IMPORTANT]
 > **Run VR Auto-Optimizer as Administrator when using the Aggressive profile.** Aggressive features require elevated Windows permissions, including stopping and restarting services, changing protected registry values, and restoring those settings afterward. Right-click `SimVROptimizer.exe` and select **Run as administrator**, then approve the Windows User Account Control prompt. Without administrator access, service stopping and other Aggressive operations may fail or be skipped.
@@ -12,6 +12,8 @@ It scans the local PC, explains the likely MSFS impact of running applications a
 - Automatic detection of ten MSFS, DCS World, X-Plane, and IL-2 configurations
 - Standard and Aggressive optimization profiles with editable granular controls
 - Named user profiles save the simulator, workflow, VR runtime, optimization toggles, application/service checkboxes, and custom app lists, with import/export, duplicate/rename, optional simulator/aircraft/headset/monitor associations, and exact saved-versus-current differences
+- Current application and service choices remain available across restarts; saved profiles change only through the explicit **Save Changes**, **Load** and **Revert** controls
+- Protected-aware **Invert Selection** control plus short measured per-application CPU and memory readings alongside curated impact guidance
 - Manual checkbox control or an Automatic session workflow
 - Pre-flight safety checklist for access level, simulator target, VR runtime, recovery state, protected components, and stop selections
 - Configurable Virtual Desktop, Pimax Play, SteamVR, or no-runtime launching
@@ -97,6 +99,7 @@ The panel connects only to `ws://127.0.0.1:48624/dashboard`. The bridge is bound
 - NVIDIA persistence is restored per GPU to its original value.
 - AMD X3D systems retain or temporarily use Windows Balanced for cache-aware CCD scheduling. Other supported CPUs can use a temporary Ultimate Performance plan. Any changed plan is restored afterward.
 - The optimizer tracks a newly created simulator PID. It does not attach to a matching process that was already running.
+- Starting a session is blocked when the selected simulator is already running. DCS sessions allow a bounded handoff from the initially detected `DCS.exe` or `DCS_mt.exe` launcher process to a newly created replacement simulator process before restoration.
 - CPU topology is detected through Windows CPU Set APIs, including processor groups on systems with more than 64 logical processors. Intel hybrid tuning uses only unparked, unreserved performance-class CPU Sets, preserves any existing simulator CPU policy, and verifies the assignment. AMD X3D, AMD, uniform-core Intel, and uncertain topologies remain safely managed by the Windows scheduler.
 - Selected applications can be stopped for the session and remain closed after the simulator exits. Services and system settings are restored, while simulator launchers and VR runtimes remain protected.
 - Standard Automatic mode selects safely restartable high- and medium-impact candidates. Aggressive Automatic mode includes all safely restartable candidates. Both restore the recorded state after the simulator exits.
@@ -128,7 +131,7 @@ Additional simulator configurations may be added in future releases.
 - Stop selected running applications for the session; choose **Leave Closed** or **Restart** for each restartable application, while OneDrive is always restored
 - Stop selected relevant services only when they were running, then restore them afterward
 
-The scan presents an impact level and explanation for each candidate. Manual mode retains saved choices, while Automatic mode selects verified **Recommend** applications and approved Aggressive services. Items without reliable classification are labelled **Keep Running** and remain available for deliberate manual selection; Windows download, simulator-launcher, VR-runtime, Xbox Gaming Services, and common flight-control services are protected. On AMD X3D systems, detected Process Lasso power controllers are locked selected so they cannot override Windows Balanced.
+The scan presents an impact level and explanation for each candidate. **CPU Now** is measured locally over a short interval and **Mem MB** shows the current working set; these readings complement rather than replace the curated Impact guidance. Manual mode retains saved choices, while Automatic mode selects verified **Recommend** applications and approved Aggressive services. Items without reliable classification are labelled **Keep Running** and remain available for deliberate manual selection; Windows download, simulator-launcher, VR-runtime, Xbox Gaming Services, and common flight-control services are protected. On AMD X3D systems, detected Process Lasso power controllers are locked selected so they cannot override Windows Balanced.
 
 The optional **Online Guidance** switch downloads the complete curated application and service catalogue; it does not upload process names, service names, executable paths, hashes, or PC details. When enabled, local executable metadata, signatures, and SHA-256 hashes are inspected on the PC and matched against catalogue names, publishers, products, and hashes. The Identity column reports **Verified**, **Identified**, **Likely**, or **Unidentified** with full details on hover. Local protection rules always take priority, and unmatched items remain **Keep Running**.
 

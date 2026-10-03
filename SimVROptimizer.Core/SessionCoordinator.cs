@@ -93,25 +93,55 @@ public sealed class SessionCoordinator
             process = await _launcher.LaunchAndWaitAsync(simulator, options, cancellationToken).ConfigureAwait(false);
             if (process is not null)
             {
+                var sessionStartedUtc = TryGetStartTimeUtc(process) ?? DateTime.UtcNow;
+                var observedProcessIds = new HashSet<int> { process.Id };
                 SimulatorProcessChanged?.Invoke(process.Id);
                 if (_companionApplicationLauncher is not null)
                     await _companionApplicationLauncher.LaunchAsync(companionApplications, CompanionLaunchTiming.AfterSimulatorStarts,
                         companionSession, options.DryRun, cancellationToken).ConfigureAwait(false);
                 await _optimizer.VerifyOrReapplySessionPowerPlanAsync(cancellationToken).ConfigureAwait(false);
-                if (_companionApplicationLauncher is not null
-                    && companionApplications.Any(item => item.Enabled && item.LaunchTiming == CompanionLaunchTiming.ReadyToFly))
+                var readyAppsPending = _companionApplicationLauncher is not null
+                    && companionApplications.Any(item => item.Enabled && item.LaunchTiming == CompanionLaunchTiming.ReadyToFly);
+
+                while (true)
                 {
-                    var launchReadyApps = await _companionApplicationLauncher.WaitUntilReadyToFlyAsync(
-                        process,
-                        IsMicrosoftFlightSimulator(simulator),
-                        TimeSpan.FromSeconds(options.LaunchTimeoutSeconds),
+                    if (readyAppsPending && _companionApplicationLauncher is not null)
+                    {
+                        var launchReadyApps = await _companionApplicationLauncher.WaitUntilReadyToFlyAsync(
+                            process,
+                            IsMicrosoftFlightSimulator(simulator),
+                            TimeSpan.FromSeconds(options.LaunchTimeoutSeconds),
+                            cancellationToken).ConfigureAwait(false);
+                        if (launchReadyApps)
+                        {
+                            await _companionApplicationLauncher.LaunchAsync(companionApplications, CompanionLaunchTiming.ReadyToFly,
+                                companionSession, options.DryRun, cancellationToken).ConfigureAwait(false);
+                            readyAppsPending = false;
+                        }
+                    }
+
+                    if (!process.HasExited)
+                        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+
+                    var replacement = await _launcher.WaitForReplacementAsync(
+                        simulator,
+                        options,
+                        observedProcessIds,
+                        sessionStartedUtc,
+                        TimeSpan.FromSeconds(15),
                         cancellationToken).ConfigureAwait(false);
-                    if (launchReadyApps)
-                        await _companionApplicationLauncher.LaunchAsync(companionApplications, CompanionLaunchTiming.ReadyToFly,
-                            companionSession, options.DryRun, cancellationToken).ConfigureAwait(false);
+                    if (replacement is null)
+                    {
+                        simulatorExited = true;
+                        break;
+                    }
+
+                    await _launcher.RestoreProcessTuningAsync(process, CancellationToken.None).ConfigureAwait(false);
+                    process.Dispose();
+                    process = replacement;
+                    observedProcessIds.Add(process.Id);
+                    SimulatorProcessChanged?.Invoke(process.Id);
                 }
-                await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-                simulatorExited = true;
             }
         }
         finally
@@ -161,4 +191,10 @@ public sealed class SessionCoordinator
 
     private static bool IsMicrosoftFlightSimulator(SimulatorDefinition simulator) =>
         simulator.Id.StartsWith("msfs", StringComparison.OrdinalIgnoreCase);
+
+    private static DateTime? TryGetStartTimeUtc(Process process)
+    {
+        try { return process.StartTime.ToUniversalTime(); }
+        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception) { return null; }
+    }
 }

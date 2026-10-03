@@ -24,6 +24,7 @@ public partial class MainWindow : Window
     private readonly PerformanceHistoryStore _performanceHistoryStore;
     private readonly RecoveryShortcutService _recoveryShortcuts;
     private readonly ApplicationRestartTester _applicationRestartTester = new();
+    private readonly ApplicationResourceSampler _applicationResourceSampler = new();
     private readonly SimulatorVersionReader _simulatorVersionReader;
     private readonly ObservableCollection<CompanionApplicationRule> _companionApplications = [];
     private AppConfig _config = new();
@@ -116,8 +117,6 @@ public partial class MainWindow : Window
         }
         RefreshToolbarPanelStatus();
         _config = await JsonStore.LoadOrDefaultAsync(_paths.ConfigFile, () => new AppConfig());
-        if (!string.IsNullOrWhiteSpace(_config.ActiveSavedProfileName))
-            UserProfileStore.TryApply(_config, _config.ActiveSavedProfileName);
         ApplyOptionsToControls();
         ShowCpuProfile();
         UpdateRecoveryState();
@@ -194,7 +193,8 @@ public partial class MainWindow : Window
             _vrRuntimeLauncher.CheckAvailability(_config.Options.VrRuntime),
             _applications,
             _services,
-            _config.Options.Profile));
+            _config.Options.Profile,
+            SimulatorLauncher.IsSimulatorRunning(simulator)));
         var preflight = simulator.Id.StartsWith("msfs", StringComparison.OrdinalIgnoreCase) && _lastOnlineHealth is not null
             ? new PreflightReport(basePreflight.Items.Append(BuildOnlineServicesPreflightItem(_lastOnlineHealth)).ToArray())
             : basePreflight;
@@ -1456,28 +1456,40 @@ public partial class MainWindow : Window
         {
             if (processId.HasValue && DashboardEnabledCheck.IsChecked == true)
             {
-                var simulatorName = (SimulatorCombo.SelectedItem as DetectedSimulator)?.Name ?? "Flight simulator";
-                _toolbarTelemetry.BeginSession(simulatorName, _config.Options.UseOpenXrTurboMode);
-                await BeginPerformanceSessionAsync(processId.Value);
-                _dashboardHistory.Clear();
-                DashFps.Text = "—";
-                DashAverageFps.Text = "—";
-                DashGpuLoad.Text = "—";
-                DashGpuMemory.Text = "—";
-                DashGpuLoad.ToolTip = "Waiting for GPU-Z sensors";
-                DashGpuMemory.ToolTip = "Waiting for GPU-Z sensors";
-                FpsGraphLine.Points.Clear();
-                _dashboardStutterCount = 0;
-                _dashboardCpuSpikeCount = 0;
-                UpdateDashboardCounterDisplay();
-                DashboardStatusText.Text = $"LIVE — monitoring simulator PID {processId.Value}.";
+                bool isProcessHandoff;
+                lock (_performanceSessionGate) isProcessHandoff = _performanceSessionStartedAt.HasValue;
+                if (isProcessHandoff)
+                {
+                    await _dashboardMonitor.StopAsync();
+                    lock (_performanceSessionGate) _performanceSessionProcessId = processId.Value;
+                    DashboardStatusText.Text = $"LIVE — DCS process handoff; monitoring replacement PID {processId.Value}.";
+                    AppendStatus($"Performance monitoring transferred to replacement simulator PID {processId.Value}.");
+                }
+                else
+                {
+                    var simulatorName = (SimulatorCombo.SelectedItem as DetectedSimulator)?.Name ?? "Flight simulator";
+                    _toolbarTelemetry.BeginSession(simulatorName, _config.Options.UseOpenXrTurboMode);
+                    await BeginPerformanceSessionAsync(processId.Value);
+                    _dashboardHistory.Clear();
+                    DashFps.Text = "—";
+                    DashAverageFps.Text = "—";
+                    DashGpuLoad.Text = "—";
+                    DashGpuMemory.Text = "—";
+                    DashGpuLoad.ToolTip = "Waiting for GPU-Z sensors";
+                    DashGpuMemory.ToolTip = "Waiting for GPU-Z sensors";
+                    FpsGraphLine.Points.Clear();
+                    _dashboardStutterCount = 0;
+                    _dashboardCpuSpikeCount = 0;
+                    UpdateDashboardCounterDisplay();
+                    DashboardStatusText.Text = $"LIVE — monitoring simulator PID {processId.Value}.";
+                }
                 try
                 {
                     await _dashboardMonitor.StartAsync(processId.Value, DashboardCsvCheck.IsChecked == true);
                 }
                 catch (Exception exception)
                 {
-                    CancelPerformanceSession();
+                    if (!isProcessHandoff) CancelPerformanceSession();
                     _toolbarTelemetry.EndSession("Performance monitor could not start: " + exception.Message);
                     DashboardStatusText.Text = "MONITOR ERROR — " + exception.Message;
                     AppendStatus("Performance dashboard could not start: " + exception.Message);
@@ -2030,6 +2042,17 @@ public partial class MainWindow : Window
                 ?? result.Simulators.FirstOrDefault();
             ApplyModeSelection();
             ApplySelectedFirstOrdering();
+            if (_applications.Count > 0)
+            {
+                AppendStatus("Measuring current per-application CPU load for 1.5 seconds…");
+                var cpuReadings = await _applicationResourceSampler.SampleCpuAsync(
+                    _applications.Select(item => item.ProcessName), TimeSpan.FromSeconds(1.5));
+                foreach (var application in _applications)
+                    application.CpuPercent = cpuReadings.TryGetValue(application.ProcessName, out var cpuPercent)
+                        ? cpuPercent
+                        : null;
+                AppsGrid.Items.Refresh();
+            }
             _applyingScanResults = false;
             AppendStatus($"Scan complete: {result.Simulators.Count} simulator(s), {result.Applications.Count} app candidate(s), {result.Services.Count} relevant service(s).");
             var classifications = result.Applications
@@ -2220,6 +2243,19 @@ public partial class MainWindow : Window
         ApplySelectedFirstOrdering();
         await SaveSelectionPreferencesAsync();
         MarkProfileDirty();
+    }
+
+    private async void InvertApplicationsButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_coordinator.IsRunning || _applications.Count == 0) return;
+        var changed = SessionSelectionPolicy.InvertApplications(_applications);
+        foreach (var application in _applications)
+            _config.ApplicationSelections[application.ProcessName] = application.Selected;
+
+        ApplySelectedFirstOrdering(AppsGrid);
+        await SaveSelectionPreferencesAsync();
+        MarkProfileDirty();
+        AppendStatus($"Inverted {changed} selectable application choice(s); protected and required applications were unchanged.");
     }
 
     private void ApplySelectedFirstOrdering()

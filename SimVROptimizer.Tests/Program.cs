@@ -26,6 +26,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Processor load summaries", TestProcessorLoadSummariesAsync),
     ("Optimization profiles", TestOptimizationProfilesAsync),
     ("Automatic selection policy", TestAutomaticSelectionPolicyAsync),
+    ("Invert application selection policy", TestInvertApplicationSelectionAsync),
     ("Application classification", TestApplicationClassificationAsync),
     ("Service classification", TestServiceClassificationAsync),
     ("Online application guidance", TestOnlineApplicationGuidanceAsync),
@@ -36,6 +37,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Application restart safety test", TestApplicationRestartSafetyAsync),
     ("Service dependency inspection", TestServiceDependencyInspectionAsync),
     ("Saved selection preferences", TestSavedSelectionPreferencesAsync),
+    ("Application CPU load calculation", TestApplicationCpuLoadCalculationAsync),
     ("Named user profiles", TestNamedUserProfilesAsync),
     ("Profiles survive administrator continuation", TestProfilesSurviveContinuationAsync),
     ("Persistent custom application rule", TestCustomApplicationRuleAsync),
@@ -65,6 +67,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Pending launch roundtrip", TestPendingLaunchRoundtripAsync),
     ("Recovery journal owner detection", TestRecoveryJournalOwnerDetectionAsync),
     ("Session safety pre-check", TestSessionPreflightAsync),
+    ("DCS process handoff policy", TestDcsProcessHandoffPolicyAsync),
     ("Dry-run makes no journal", TestDryRunAsync),
     ("Transactional restore", TestTransactionalRestoreAsync),
     ("Failed restore verification retains journal", TestRestoreVerificationFailureAsync),
@@ -102,6 +105,30 @@ static Task TestSessionPreflightAsync()
     True(!blocked.CanProceed);
     Equal(3, blocked.BlockedCount);
     True(blocked.WarningCount == 1);
+
+    var simulatorRunning = SessionPreflight.Evaluate(new SessionPreflightContext(
+        true, false, simulator, new(VrRuntimePreference.None, true, false, "None selected."),
+        [safeApp], [protectedService], OptimizationProfile.Standard, SimulatorAlreadyRunning: true));
+    True(!simulatorRunning.CanProceed);
+    True(simulatorRunning.Items.Any(item => item.Name == "Simulator target"
+        && item.Status == PreflightStatus.Blocked
+        && item.Detail.Contains("already running", StringComparison.OrdinalIgnoreCase)));
+    return Task.CompletedTask;
+}
+
+static Task TestDcsProcessHandoffPolicyAsync()
+{
+    var dcs = new SimulatorDefinition("dcs-steam", "DCS World", ["DCS", "DCS_mt"], LaunchKind.Uri, "steam://run/223750");
+    var msfs = new SimulatorDefinition("msfs2024-steam", "MSFS 2024", ["FlightSimulator2024"], LaunchKind.Uri, "steam://run/2537590");
+    var sessionStarted = DateTime.UtcNow.AddSeconds(-10);
+    var observed = new HashSet<int> { 100 };
+    True(SimulatorProcessHandoffPolicy.Supports(dcs));
+    True(!SimulatorProcessHandoffPolicy.Supports(msfs));
+    True(SimulatorProcessHandoffPolicy.IsEligible(dcs, "DCS_mt", 101, DateTime.UtcNow, observed, sessionStarted));
+    True(!SimulatorProcessHandoffPolicy.IsEligible(dcs, "DCS_mt", 100, DateTime.UtcNow, observed, sessionStarted));
+    True(!SimulatorProcessHandoffPolicy.IsEligible(dcs, "Other", 101, DateTime.UtcNow, observed, sessionStarted));
+    True(!SimulatorProcessHandoffPolicy.IsEligible(dcs, "DCS", 101, sessionStarted.AddMinutes(-1), observed, sessionStarted));
+    True(!SimulatorProcessHandoffPolicy.IsEligible(msfs, "FlightSimulator2024", 101, DateTime.UtcNow, observed, sessionStarted));
     return Task.CompletedTask;
 }
 
@@ -321,6 +348,35 @@ static Task TestAutomaticSelectionPolicyAsync()
     True(!obs.Selected);
     True(stoppableService.Selected);
     True(!streamDeckService.Selected);
+    return Task.CompletedTask;
+}
+
+static Task TestInvertApplicationSelectionAsync()
+{
+    RunningAppCandidate Candidate(string name, bool selected, bool canStop = true, bool required = false) => new()
+    {
+        ProcessName = name,
+        DisplayName = name,
+        Impact = ImpactLevel.Low,
+        Reason = "test",
+        InstanceCount = 1,
+        MemoryMb = 1,
+        RestartCommand = "exe:C:\\test.exe",
+        CanStop = canStop,
+        SelectionRequired = required,
+        Selected = selected
+    };
+
+    var selected = Candidate("Selected", true);
+    var cleared = Candidate("Cleared", false);
+    var protectedApplication = Candidate("Protected", false, canStop: false);
+    var requiredApplication = Candidate("Required", true, required: true);
+    var changed = SessionSelectionPolicy.InvertApplications([selected, cleared, protectedApplication, requiredApplication]);
+    Equal(2, changed);
+    True(!selected.Selected);
+    True(cleared.Selected);
+    True(!protectedApplication.Selected);
+    True(requiredApplication.Selected);
     return Task.CompletedTask;
 }
 
@@ -840,6 +896,19 @@ static async Task TestSavedSelectionPreferencesAsync()
     Equal(true, loaded.ApplicationSelections["exampleapp"]);
     Equal(true, loaded.ServiceSelections["exampleservice"]);
     Directory.Delete(directory, true);
+}
+
+static Task TestApplicationCpuLoadCalculationAsync()
+{
+    Equal(25d, ApplicationResourceSampler.CalculateCpuPercent(
+        TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2), 4));
+    Equal(100d, ApplicationResourceSampler.CalculateCpuPercent(
+        TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(1), 4));
+    Equal(0d, ApplicationResourceSampler.CalculateCpuPercent(
+        TimeSpan.FromSeconds(-1), TimeSpan.FromSeconds(1), 4));
+    Equal(0d, ApplicationResourceSampler.CalculateCpuPercent(
+        TimeSpan.FromSeconds(1), TimeSpan.Zero, 4));
+    return Task.CompletedTask;
 }
 
 static async Task TestNamedUserProfilesAsync()

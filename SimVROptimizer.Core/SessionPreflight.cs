@@ -30,7 +30,8 @@ public sealed record SessionPreflightContext(
     VrRuntimeAvailability Runtime,
     IReadOnlyList<RunningAppCandidate> Applications,
     IReadOnlyList<ServiceCandidate> Services,
-    OptimizationProfile Profile);
+    OptimizationProfile Profile,
+    bool SimulatorAlreadyRunning = false);
 
 public static class SessionPreflight
 {
@@ -41,7 +42,7 @@ public static class SessionPreflight
             context.IsAdministrator
                 ? new("Administrator access", PreflightStatus.Ready, "Administrator access is active.")
                 : new("Administrator access", PreflightStatus.Warning, "Windows will request administrator access before optimization begins."),
-            EvaluateSimulator(context.Simulator),
+            EvaluateSimulator(context.Simulator, context.SimulatorAlreadyRunning),
             context.Runtime.Available
                 ? new("VR runtime", PreflightStatus.Ready, context.Runtime.Detail)
                 : new("VR runtime", PreflightStatus.Blocked, context.Runtime.Detail),
@@ -55,13 +56,17 @@ public static class SessionPreflight
         return new PreflightReport(items);
     }
 
-    private static PreflightItem EvaluateSimulator(SimulatorDefinition? simulator)
+    private static PreflightItem EvaluateSimulator(SimulatorDefinition? simulator, bool alreadyRunning)
     {
         if (simulator is null)
             return new("Simulator target", PreflightStatus.Blocked, "No detected simulator is selected.");
 
         if (simulator.LaunchKind == LaunchKind.Executable && !File.Exists(simulator.LaunchTarget))
             return new("Simulator target", PreflightStatus.Blocked, $"The simulator executable could not be found: {simulator.LaunchTarget}");
+
+        if (alreadyRunning)
+            return new("Simulator target", PreflightStatus.Blocked,
+                $"{simulator.Name} is already running. Close it, then start the optimizer session so the complete simulator process can be monitored safely.");
 
         return new("Simulator target", PreflightStatus.Ready, $"{simulator.Name} is detected and has a valid launch target.");
     }
