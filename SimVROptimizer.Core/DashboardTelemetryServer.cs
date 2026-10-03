@@ -18,7 +18,8 @@ public sealed record DashboardTelemetryFrame(
     bool OpenXrTurboMode,
     PerformanceTelemetrySample? Sample,
     string CpuName,
-    IReadOnlyList<ProcessorLoadGroup> ProcessorGroups);
+    IReadOnlyList<ProcessorLoadGroup> ProcessorGroups,
+    GpuTelemetrySnapshot Gpu);
 
 /// <summary>
 /// Publishes dashboard samples to the MSFS toolbar panel over a loopback-only,
@@ -32,6 +33,7 @@ public sealed class DashboardTelemetryServer : IAsyncDisposable
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly FileLogger _logger;
     private readonly int _port;
+    private readonly IGpuTelemetrySource _gpuTelemetry;
     private CpuProfile? _cpuProfile;
     private readonly ConcurrentDictionary<long, ClientConnection> _clients = new();
     private readonly object _snapshotGate = new();
@@ -40,13 +42,16 @@ public sealed class DashboardTelemetryServer : IAsyncDisposable
     private Task? _acceptLoop;
     private long _nextClientId;
     private DashboardTelemetryFrame _snapshot = new(
-        5, DateTimeOffset.UtcNow, false, "Optimizer ready", "", 0, 0, false, null, "", []);
+        6, DateTimeOffset.UtcNow, false, "Optimizer ready", "", 0, 0, false, null, "", [],
+        GpuTelemetrySnapshot.Unavailable("GPU-Z is not running"));
 
-    public DashboardTelemetryServer(FileLogger logger, int port = DefaultPort, CpuProfile? cpuProfile = null)
+    public DashboardTelemetryServer(FileLogger logger, int port = DefaultPort, CpuProfile? cpuProfile = null,
+        IGpuTelemetrySource? gpuTelemetry = null)
     {
         _logger = logger;
         _port = port;
         _cpuProfile = cpuProfile;
+        _gpuTelemetry = gpuTelemetry ?? new GpuZSharedMemoryReader();
     }
 
     public int Port => _port;
@@ -77,15 +82,16 @@ public sealed class DashboardTelemetryServer : IAsyncDisposable
         lock (_snapshotGate)
         {
             _snapshot = new DashboardTelemetryFrame(
-                5, DateTimeOffset.UtcNow, true, "Waiting for the first performance sample", simulator, 0, 0,
+                6, DateTimeOffset.UtcNow, true, "Waiting for the first performance sample", simulator, 0, 0,
                 openXrTurboMode, null,
-                _cpuProfile?.Model ?? "", []);
+                _cpuProfile?.Model ?? "", [], GpuTelemetrySnapshot.Unavailable("Waiting for GPU-Z sensors"));
         }
         BroadcastSnapshot();
     }
 
-    public void Publish(PerformanceTelemetrySample sample)
+    public GpuTelemetrySnapshot Publish(PerformanceTelemetrySample sample)
     {
+        var gpu = _gpuTelemetry.Read();
         lock (_snapshotGate)
         {
             _snapshot = _snapshot with
@@ -97,10 +103,12 @@ public sealed class DashboardTelemetryServer : IAsyncDisposable
                 CpuSpikeCount = _snapshot.CpuSpikeCount + (sample.CpuSpike ? 1 : 0),
                 Sample = sample,
                 CpuName = _cpuProfile?.Model ?? "",
-                ProcessorGroups = ProcessorLoadSummarizer.Summarize(_cpuProfile, sample.LogicalProcessorUsage)
+                ProcessorGroups = ProcessorLoadSummarizer.Summarize(_cpuProfile, sample.LogicalProcessorUsage),
+                Gpu = gpu
             };
         }
         BroadcastSnapshot();
+        return gpu;
     }
 
     public void EndSession(string status = "Flight session complete")

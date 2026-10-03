@@ -18,6 +18,7 @@ public sealed class CompanionApplicationSession : IDisposable
 public sealed class CompanionApplicationLauncher
 {
     private readonly FileLogger _logger;
+    private readonly ProcessWindowMinimizer _windowMinimizer = new();
 
     public CompanionApplicationLauncher(FileLogger logger) => _logger = logger;
 
@@ -121,11 +122,27 @@ public sealed class CompanionApplicationLauncher
                 }
                 session.StartedProcesses.Add((rule, process));
                 await ReportAsync($"Launched companion app {name} ({timing}; PID {process.Id}; administrator: {(rule.RunAsAdministrator ? "requested" : "inherit")}).", cancellationToken).ConfigureAwait(false);
+                if (rule.MinimizeAfterLaunch)
+                    _ = MinimizeAfterLaunchAsync(process, name, cancellationToken);
             }
             catch (Exception exception) when (exception is Win32Exception or InvalidOperationException)
             {
                 await ReportAsync($"Companion app could not be launched: {name}: {exception.Message}", cancellationToken).ConfigureAwait(false);
             }
+        }
+    }
+
+    private async Task MinimizeAfterLaunchAsync(Process process, string name, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var minimized = await _windowMinimizer.MinimizeWhenReadyAsync(process, TimeSpan.FromSeconds(20), cancellationToken).ConfigureAwait(false);
+            await ReportAsync(minimized
+                ? $"Minimized companion app after launch: {name}."
+                : $"Companion app {name} did not expose a normal window to minimize within 20 seconds.", cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
     }
 

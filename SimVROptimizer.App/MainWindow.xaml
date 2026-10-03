@@ -545,6 +545,7 @@
                             <DataGrid.Columns>
                                 <DataGridCheckBoxColumn Header="ON" Binding="{Binding Enabled, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="45" />
                                 <DataGridCheckBoxColumn Header="ADMIN" Binding="{Binding RunAsAdministrator, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="62" />
+                                <DataGridCheckBoxColumn Header="MINIMIZE" Binding="{Binding MinimizeAfterLaunch, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="78" />
                                 <DataGridTextColumn Header="NAME" Binding="{Binding Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="130" />
                                 <DataGridTextColumn Header="EXECUTABLE" Binding="{Binding ExecutablePath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="2.2*" />
                                 <DataGridTemplateColumn Header="START" Width="180">
@@ -571,7 +572,7 @@
                                 <Button x:Name="AddCompanionAppButton" Content="SELECT APP / EXE" Click="AddCompanionAppButton_Click" Background="#233137" Foreground="{StaticResource GreenBrush}" />
                                 <Button x:Name="RemoveCompanionAppButton" Content="REMOVE" Click="RemoveCompanionAppButton_Click" Background="#3A2424" Foreground="#FFB4AE" BorderBrush="{StaticResource RedBrush}" />
                             </StackPanel>
-                            <TextBlock Text="Launch delay is applied after the selected trigger and before starting that app (0–300 seconds). READY TO FLY uses MSFS SimConnect FlightLoaded with a bounded fallback. CLOSE ON SESSION END first requests a normal app exit."
+                            <TextBlock Text="MINIMIZE waits for the launched app's normal window and minimizes it. Launch delay is applied after the selected trigger and before starting that app (0–300 seconds). READY TO FLY uses MSFS SimConnect FlightLoaded with a bounded fallback. CLOSE ON SESSION END first requests a normal app exit."
                                        Foreground="{StaticResource MutedTextBrush}" FontFamily="Consolas" TextWrapping="Wrap" VerticalAlignment="Center" />
                         </DockPanel>
                         <TextBlock Text="APPS TO CLOSE DURING THE FLIGHT" Style="{StaticResource InstrumentLabel}" />
@@ -615,14 +616,7 @@
                                     <TextBlock x:Name="VrRuntimeAvailabilityText" Text="LAUNCHER STATUS  /  —" Margin="0,6,0,0" FontFamily="Consolas" TextWrapping="Wrap" />
                                     <TextBlock x:Name="VrRuntimeAlignmentText" Text="RUNTIME ALIGNMENT  /  —" Margin="0,6,0,0" FontFamily="Consolas" FontWeight="Bold" TextWrapping="Wrap" />
                                     <TextBlock x:Name="VrRuntimeNameText" Text="ACTIVE RUNTIME  /  —" Margin="0,9,0,0" FontFamily="Consolas" Foreground="{StaticResource CyanBrush}" TextWrapping="Wrap" />
-                                    <TextBlock x:Name="VrRuntimeApiText" Text="OPENXR API  /  —" Margin="0,6,0,0" FontFamily="Consolas" />
-                                    <TextBlock x:Name="VrRuntimeManifestText" Text="MANIFEST  /  —" Margin="0,6,0,0" FontFamily="Consolas" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" />
-                                    <TextBlock x:Name="VrRuntimeProcessesText" Text="RUNNING  /  —" Margin="0,6,0,0" FontFamily="Consolas" TextWrapping="Wrap" />
                                     <TextBlock x:Name="VrHeadsetText" Text="HEADSET  /  —" Margin="0,6,0,0" FontFamily="Consolas" TextWrapping="Wrap" />
-                                    <TextBlock x:Name="VrDisplayTimingText" Text="REFRESH / RENDER SCALE  /  —" Margin="0,6,0,0" FontFamily="Consolas" TextWrapping="Wrap" />
-                                    <TextBlock x:Name="VrMotionText" Text="MOTION REPROJECTION  /  —" Margin="0,6,0,0" FontFamily="Consolas" TextWrapping="Wrap" />
-                                    <TextBlock x:Name="VrLayersText" Text="IMPLICIT LAYERS  /  —" Margin="0,6,0,0" FontFamily="Consolas" TextWrapping="Wrap" />
-                                    <TextBlock x:Name="VrOverridesText" Text="ENVIRONMENT OVERRIDES  /  NONE" Margin="0,6,0,0" FontFamily="Consolas" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" />
                                     <TextBlock x:Name="VrInstalledRuntimesText" Text="AVAILABLE LAUNCHERS  /  —" Margin="0,6,0,0" FontFamily="Consolas" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" />
                                 </StackPanel>
                             </Border>
@@ -681,28 +675,40 @@
                                 <Grid Height="160" Margin="0,0,0,9" Background="#081012" ClipToBounds="True" SizeChanged="PerformanceTrendGraph_SizeChanged">
                                     <Canvas x:Name="PerformanceTrendCanvas" Margin="8,8,8,22" ClipToBounds="True" />
                                     <TextBlock Text="OLDER" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="8,0,0,4" FontFamily="Consolas" FontSize="10" Foreground="{StaticResource MutedTextBrush}" />
-                                    <TextBlock Text="AVG FPS / CYAN   •   1% LOW / GREEN   •   CHANGE / AMBER" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,4" FontFamily="Consolas" FontSize="10" Foreground="{StaticResource MutedTextBrush}" />
+                                    <TextBlock Text="AVG FPS / CYAN   •   CHANGE / AMBER" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,4" FontFamily="Consolas" FontSize="10" Foreground="{StaticResource MutedTextBrush}" />
                                     <TextBlock Text="NEWER" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,8,4" FontFamily="Consolas" FontSize="10" Foreground="{StaticResource MutedTextBrush}" />
                                     <TextBlock x:Name="PerformanceTrendScaleText" Text="0–120 FPS" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,4,8,0" FontFamily="Consolas" FontSize="10" Foreground="{StaticResource MutedTextBrush}" />
                                 </Grid>
                                 <TextBlock x:Name="PerformanceTrendChangesText" Text="VERSION / PROFILE CHANGES  /  None recorded"
                                            Margin="0,0,0,9" FontFamily="Consolas" Foreground="{StaticResource AccentBrush}" TextWrapping="Wrap" />
+                                <DockPanel Margin="0,0,0,7" LastChildFill="True">
+                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                        <Button Content="SAVE SELECTED" Click="SavePerformanceHistoryButton_Click" Padding="11,6"
+                                                Background="#233137" Foreground="{StaticResource CyanBrush}"
+                                                ToolTip="Save the selected session records to a portable JSON comparison file." />
+                                        <Button Content="DELETE SELECTED" Click="DeletePerformanceHistoryButton_Click" Padding="11,6" Margin="7,0,0,0"
+                                                Background="#321C1C" BorderBrush="{StaticResource RedBrush}" Foreground="#FFB0A8"
+                                                ToolTip="Permanently remove the selected records from performance history." />
+                                    </StackPanel>
+                                    <TextBlock Text="Click a column heading to sort. Use Ctrl or Shift to select multiple records."
+                                               VerticalAlignment="Center" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" />
+                                </DockPanel>
                                 <DataGrid x:Name="PerformanceHistoryGrid" Height="210" AutoGenerateColumns="False" IsReadOnly="True"
+                                          CanUserSortColumns="True" SelectionMode="Extended" SelectionUnit="FullRow"
                                           Background="#0C1214" RowBackground="#0C1214" AlternatingRowBackground="#111A1D"
                                           GridLinesVisibility="Horizontal" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
                                     <DataGrid.Columns>
-                                        <DataGridTextColumn Header="STARTED" Binding="{Binding StartedLabel}" Width="1.35*" />
-                                        <DataGridTextColumn Header="SIMULATOR" Binding="{Binding Simulator}" Width="2*" />
-                                        <DataGridTextColumn Header="PROFILE" Binding="{Binding Profile}" Width="*" />
-                                        <DataGridTextColumn Header="SIM VERSION" Binding="{Binding SimulatorVersion}" Width="1.2*" />
-                                        <DataGridTextColumn Header="GPU DRIVER" Binding="{Binding GpuDriverVersion}" Width="1.5*" />
-                                        <DataGridTextColumn Header="CHANGES" Binding="{Binding Changes}" Width="2*" />
-                                        <DataGridTextColumn Header="DURATION" Binding="{Binding DurationLabel}" Width="*" />
-                                        <DataGridTextColumn Header="AVG FPS" Binding="{Binding AverageFpsLabel}" Width="*" />
-                                        <DataGridTextColumn Header="1% LOW" Binding="{Binding OnePercentLowLabel}" Width="*" />
-                                        <DataGridTextColumn Header="MAIN THREAD" Binding="{Binding MainThreadLabel}" Width="1.1*" />
-                                        <DataGridTextColumn Header="STUTTERS" Binding="{Binding StutterCount}" Width="*" />
-                                        <DataGridTextColumn Header="SPIKES" Binding="{Binding CpuSpikeCount}" Width="*" />
+                                        <DataGridTextColumn Header="STARTED" Binding="{Binding StartedLabel}" SortMemberPath="StartedAt" Width="1.35*" />
+                                        <DataGridTextColumn Header="SIMULATOR" Binding="{Binding Simulator}" SortMemberPath="Simulator" Width="2*" />
+                                        <DataGridTextColumn Header="PROFILE" Binding="{Binding Profile}" SortMemberPath="Profile" Width="*" />
+                                        <DataGridTextColumn Header="SIM VERSION" Binding="{Binding SimulatorVersion}" SortMemberPath="SimulatorVersion" Width="1.2*" />
+                                        <DataGridTextColumn Header="GPU DRIVER" Binding="{Binding GpuDriverVersion}" SortMemberPath="GpuDriverVersion" Width="1.5*" />
+                                        <DataGridTextColumn Header="CHANGES" Binding="{Binding Changes}" SortMemberPath="Changes" Width="2*" />
+                                        <DataGridTextColumn Header="DURATION" Binding="{Binding DurationLabel}" SortMemberPath="DurationMinutes" Width="*" />
+                                        <DataGridTextColumn Header="AVG FPS" Binding="{Binding AverageFpsLabel}" SortMemberPath="AverageFps" Width="*" />
+                                        <DataGridTextColumn Header="MAIN THREAD" Binding="{Binding MainThreadLabel}" SortMemberPath="AverageMainThreadMs" Width="1.1*" />
+                                        <DataGridTextColumn Header="STUTTERS" Binding="{Binding StutterCount}" SortMemberPath="StutterCount" Width="*" />
+                                        <DataGridTextColumn Header="SPIKES" Binding="{Binding CpuSpikeCount}" SortMemberPath="CpuSpikeCount" Width="*" />
                                     </DataGrid.Columns>
                                 </DataGrid>
                                 <TextBlock Text="A comparison is created after two monitored flights use the same simulator and optimization profile. Higher FPS and lower MainThread, stutter and spike values are improvements."
@@ -734,11 +740,11 @@
                         <UniformGrid Columns="7" Margin="0,0,0,7">
                             <Border Style="{StaticResource PanelFrame}" Padding="8,6" Margin="0,0,6,0"><StackPanel><TextBlock Text="FPS" Style="{StaticResource InstrumentLabel}"/><TextBlock x:Name="DashFps" Text="—" FontFamily="Consolas" FontSize="21" Foreground="{StaticResource GreenBrush}"/></StackPanel></Border>
                             <Border Style="{StaticResource PanelFrame}" Padding="8,6" Margin="0,0,6,0"><StackPanel><TextBlock Text="AVERAGE" Style="{StaticResource InstrumentLabel}"/><TextBlock x:Name="DashAverageFps" Text="—" FontFamily="Consolas" FontSize="21" Foreground="{StaticResource CyanBrush}"/></StackPanel></Border>
-                            <Border Style="{StaticResource PanelFrame}" Padding="8,6" Margin="0,0,6,0"><StackPanel><TextBlock Text="1% LOW" Style="{StaticResource InstrumentLabel}"/><TextBlock x:Name="DashOneLow" Text="—" FontFamily="Consolas" FontSize="21" Foreground="{StaticResource AccentBrush}"/></StackPanel></Border>
-                            <Border Style="{StaticResource PanelFrame}" Padding="8,6" Margin="0,0,6,0"><StackPanel><TextBlock Text="FRAME MS" Style="{StaticResource InstrumentLabel}"/><TextBlock x:Name="DashFrameTime" Text="—" FontFamily="Consolas" FontSize="21" Foreground="{StaticResource CyanBrush}"/></StackPanel></Border>
+                            <Border Style="{StaticResource PanelFrame}" Padding="8,6" Margin="0,0,6,0"><StackPanel><TextBlock Text="GPU LOAD" Style="{StaticResource InstrumentLabel}"/><TextBlock x:Name="DashGpuLoad" Text="—" FontFamily="Consolas" FontSize="21" Foreground="{StaticResource AccentBrush}"/></StackPanel></Border>
+                            <Border Style="{StaticResource PanelFrame}" Padding="8,6" Margin="0,0,6,0"><StackPanel><TextBlock Text="GPU MEMORY" Style="{StaticResource InstrumentLabel}"/><TextBlock x:Name="DashGpuMemory" Text="—" FontFamily="Consolas" FontSize="21" Foreground="{StaticResource CyanBrush}"/></StackPanel></Border>
                             <Border Style="{StaticResource PanelFrame}" Padding="8,6" Margin="0,0,6,0"><StackPanel><TextBlock Text="SIM CPU" Style="{StaticResource InstrumentLabel}"/><TextBlock x:Name="DashProcessCpu" Text="—" FontFamily="Consolas" FontSize="21" Foreground="{StaticResource AccentBrush}"/></StackPanel></Border>
                             <Border Style="{StaticResource PanelFrame}" Padding="8,6" Margin="0,0,6,0"><StackPanel><TextBlock Text="MAIN THREAD" Style="{StaticResource InstrumentLabel}"/><TextBlock x:Name="DashMainThread" Text="—" FontFamily="Consolas" FontSize="21" Foreground="{StaticResource CyanBrush}"/></StackPanel></Border>
-                            <Border Style="{StaticResource PanelFrame}" Padding="8,6"><StackPanel><TextBlock Text="MEMORY" Style="{StaticResource InstrumentLabel}"/><TextBlock x:Name="DashMemory" Text="—" FontFamily="Consolas" FontSize="21" Foreground="{StaticResource CyanBrush}"/></StackPanel></Border>
+                            <Border Style="{StaticResource PanelFrame}" Padding="8,6"><StackPanel><TextBlock Text="SIM MEMORY" Style="{StaticResource InstrumentLabel}"/><TextBlock x:Name="DashMemory" Text="—" FontFamily="Consolas" FontSize="21" Foreground="{StaticResource CyanBrush}"/></StackPanel></Border>
                         </UniformGrid>
 
                         <Grid>

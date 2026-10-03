@@ -19,14 +19,14 @@ It scans the local PC, explains the likely MSFS impact of running applications a
 - Optional `-FastLaunch` startup for Microsoft Flight Simulator 2024 on both Steam and Microsoft Store
 - Optional OpenXR Turbo frame-pacing layer, bundled with VR Auto-Optimizer and transactionally registered only for the flight session; OpenXR Toolkit is not required
 - Live five-stage Prepare, Optimize, VR Runtime, Simulator, and Restore pipeline
-- Live performance dashboard with simulator FPS, frame time, average and 1% low FPS, system/simulator CPU, compact processor-load summaries, MainThread timing, memory, spike detection, stutter detection, and optional CSV logging
+- Live performance dashboard with simulator FPS and average FPS, GPU-Z GPU Load/VRAM usage percentage, system/simulator CPU, compact processor-load summaries, MainThread timing, simulator memory, spike detection, stutter detection, and optional CSV logging
 - One-click pause/resume control for frame-time stutter and CPU-spike recording, so simulator loading does not inflate flight counters or session history while all other live metrics continue updating
 - One-click privacy-scrubbed support package containing configuration, detected workloads, CPU/GPU/OpenXR details, driver versions, restoration results, performance history, logs, and recent telemetry
 - Safer workload controls with service dependency/dependent visibility, selection and pre-flight dependency warnings, application restart-command warnings, and an explicit Test Restart action
-- Automatic flight-session history with latest-versus-previous comparisons and FPS/1% low trend graphs, including MainThread time, stutters, CPU spikes, simulator version, GPU driver and profile-change markers
-- Movable MSFS 2024 in-simulator VR toolbar dashboard with the same live metrics, graphs, AMD CCD0/CCD1 load summaries, and spike/stutter counters over a loopback-only read-only connection
+- Automatic flight-session history with sortable columns, multi-select JSON export, confirmed record deletion, latest-versus-previous comparisons and average-FPS trend graphs, including MainThread time, stutters, CPU spikes, simulator version, GPU driver and profile-change markers
+- Movable MSFS 2024 in-simulator VR toolbar dashboard with live FPS, GPU-Z GPU Load/VRAM usage percentage, simulator CPU/memory, MainThread timing, graphs, AMD CCD0/CCD1 load summaries, and spike/stutter counters over a loopback-only read-only connection
 - Persistent custom process kill rules; applications stopped for a flight remain closed during restoration
-- Profile-aware companion-app preloading for tools such as Active Sky, SayIntentions and REX Core Atmos, with before-start, after-process-start and SimConnect-confirmed Ready-to-Fly timing, per-app delays, optional administrator launch, duplicate prevention, and tracked post-flight cleanup
+- Profile-aware companion-app preloading for tools such as Active Sky, SayIntentions, REX Core Atmos and GPU-Z, with before-start, after-process-start and SimConnect-confirmed Ready-to-Fly timing, per-app delays, optional administrator launch, minimize-after-launch, duplicate prevention, and tracked post-flight cleanup
 - In-app custom-list instructions and non-saving examples for process names and optional restart paths
 - Automatic service and system-setting restoration through a transaction journal; each selected application can be set to **Leave Closed** or **Restart**, while OneDrive is always restored
 - After a completed flight, selecting **Close Report** closes the restoration report and VR Auto-Optimizer after final cleanup; manually opened reports remain report-only
@@ -47,7 +47,7 @@ It scans the local PC, explains the likely MSFS impact of running applications a
 - Dedicated read-only Display / DLSS tab showing saved MSFS desktop/VR TAA or DLSS mode, the active DLSS runtime version, NVIDIA App model presets, and installed NVIDIA or AMD GPU driver details
 - Read-only display recommendations based on the latest matching monitored flight, including likely CPU/graphics balance, DLSS mode, render-scaling and stable frame-rate target guidance, with explicit timestamped `UserCfg.opt` backup
 - Administrator-controlled NVIDIA DLSS information overlay switch on the Display / DLSS tab, using NVIDIA's documented global indicator value so the active DLSS version and preset information can be verified inside MSFS
-- VR runtime diagnostics covering selected-runtime launcher availability, selected-versus-active runtime alignment, registered OpenXR runtime, manifest/API version, running components, implicit API layers, environment overrides, and SteamVR display settings when available
+- VR runtime diagnostics showing selected-runtime launcher availability, selected-versus-active alignment, the registered OpenXR runtime, detected headset and available launchers. Pimax identification uses passive manifest and device-log inspection so the active runtime is never loaded or disturbed; deeper OpenXR registration details remain available in support packages.
 - MSFS online-services health checks for the official MSFS 2024 Live Weather, Live Traffic, Multiplayer and Online Services states, local network availability, Microsoft/Xbox DNS resolution and Xbox support-service readiness, plus a conservative DNS/service-start repair
 - Protected Steam, Xbox/MSFS, VR/OpenXR, networking, security, and flight-control components
 - Content Creator Mode for OBS, Streamlabs, Stream Deck, NVIDIA Broadcast, Voicemeeter, Elgato, and other capture tools
@@ -77,6 +77,8 @@ The Windows application includes a separate dashboard-only toolbar panel for Mic
 2. Open **Advanced** in VR Auto-Optimizer and select **Install Panel** under **MSFS 2024 / VR Toolbar Dashboard**.
 3. Restart MSFS 2024, begin a flight, and open **VR Optimizer** from the simulator toolbar.
 4. Keep VR Auto-Optimizer running. Live data begins when the simulator process and dashboard monitor start.
+
+For the toolbar's **GPU Load** and **GPU Memory** cards, keep GPU-Z running during the flight. GPU Memory is displayed as a percentage of the card's total VRAM; hover over it to see the live used/total MB values. VR Auto-Optimizer reads GPU-Z's local read-only `GPUZShMem` sensor mapping; it does not launch, configure or control GPU-Z. If GPU-Z is closed, updating its sensor table, stale, or missing a required value, the affected toolbar card displays a dash and its hover text explains the source state. The separate **Sim Memory** card continues to show the simulator process working set.
 
 The installer detects the `InstalledPackagesPath` recorded by MSFS and installs the compiled package structure into its `Community` folder. **Remove** uninstalls only the recognized FlightDeckTools package. Restart MSFS after installing, updating, or removing it.
 
@@ -138,7 +140,7 @@ The Dashboard's CPU summary, simulator thread, and memory readings work for stan
 
 Persistent Aggressive changes are written to the recovery journal before they are applied and restored in reverse order after the simulator exits. The 0.5 ms timer request is released and simulator power-throttling state is restored. DNS flushing and standby-list clearing are one-time operations rather than persistent settings; their caches naturally repopulate. NVIDIA persistence is supported and restored, but the driver-profile “Prefer maximum performance” setting is not forced because reliable per-profile restoration requires a dedicated NVIDIA NVAPI integration.
 
-The **Custom Apps** tab has two separate roles. **Companion App Preload** stores external executable paths, launch timing and a delay applied before each app starts. Companion changes are stored when **Save Changes** is selected on the **Flight Profile** tab, then restored whenever that named profile is loaded or reapplied at startup. An app can start **Before Simulator**, **After Simulator Starts**, or **Ready to Fly**. For MSFS, Ready to Fly waits for the SimConnect `FlightLoaded` event and then applies the configured launch delay; if readiness cannot be confirmed, the profile's bounded launch timeout is used as a fallback. Select **Admin** when that companion must be started using Windows' administrator `runas` request. Apps that are already running are never duplicated. For cleanup, choose **Leave Running** or **Close On Session End**; automatic cleanup applies only to the process instance started by VR Auto-Optimizer and first requests a normal window close before terminating that tracked process if necessary. These rules are included in named profiles and survive the administrator handoff.
+The **Custom Apps** tab has two separate roles. **Companion App Preload** stores external executable paths, launch timing and a delay applied before each app starts. Companion changes are stored when **Save Changes** is selected on the **Flight Profile** tab, then restored whenever that named profile is loaded or reapplied at startup. An app can start **Before Simulator**, **After Simulator Starts**, or **Ready to Fly**. For MSFS, Ready to Fly waits for the SimConnect `FlightLoaded` event and then applies the configured launch delay; if readiness cannot be confirmed, the profile's bounded launch timeout is used as a fallback. Select **Admin** when that companion must be started using Windows' administrator `runas` request. Select **Minimize** to wait up to 20 seconds for the newly launched app's normal window and minimize it; an app without a normal window is left untouched and reported in the Flight Log. Apps that are already running are never duplicated or minimized. For cleanup, choose **Leave Running** or **Close On Session End**; automatic cleanup applies only to the process instance started by VR Auto-Optimizer and first requests a normal window close before terminating that tracked process if necessary. These rules are included in named profiles and survive the administrator handoff.
 
 The lower custom-app list stores process names in `config.json`; matching running processes appear as custom candidates on every scan so they can be closed during the flight. This close list is independent of companion preloading.
 
@@ -188,6 +190,19 @@ The test runner has no third-party test framework dependency. It covers output p
 ## License
 
 Licensed under the [MIT License](LICENSE).
+
+## Credits & Acknowledgments
+
+This project is based on the original VR Optimizer application developed by @shark. Huge thanks to @shark for open-sourcing the initial codebase and making this work possible.
+
+## Release notes — 2.4.2
+
+- Reworked the desktop and MSFS toolbar dashboards with live GPU-Z GPU Load and VRAM-percentage readings, while retaining simulator memory and CPU/MainThread telemetry.
+- Added sortable session history, multi-record JSON export, confirmed deletion, simulator-version detection fixes, and updated performance comparisons without the retired 1% Low metric.
+- Added profile-owned **Minimize After Launch** handling for companion apps.
+- Improved Pimax diagnostics using passive manifest/device-log inspection and simplified the visible runtime panel so diagnostics never load or disturb the active OpenXR runtime.
+- Corrected DLSS version formatting to four dotted components, such as `DLSS v310.9.1.0`; the version is displayed only while MSFS has actually loaded the library.
+- Expanded automated validation to 62 passing tests.
 
 ## Release notes — 2.4.1
 

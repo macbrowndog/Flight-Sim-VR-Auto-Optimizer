@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Media;
+using Microsoft.Win32;
 using SimVROptimizer.Core;
 
 namespace SimVROptimizer.App;
@@ -23,6 +24,7 @@ public partial class MainWindow : Window
     private readonly PerformanceHistoryStore _performanceHistoryStore;
     private readonly RecoveryShortcutService _recoveryShortcuts;
     private readonly ApplicationRestartTester _applicationRestartTester = new();
+    private readonly SimulatorVersionReader _simulatorVersionReader;
     private readonly ObservableCollection<CompanionApplicationRule> _companionApplications = [];
     private AppConfig _config = new();
     private IReadOnlyList<RunningAppCandidate> _applications = [];
@@ -48,6 +50,8 @@ public partial class MainWindow : Window
     private string _performanceSessionSimulatorVersion = "Unknown";
     private string _performanceSessionGpuDriverVersion = "Unknown";
     private string _performanceSessionOptimizerVersion = "Unknown";
+    private int? _performanceSessionProcessId;
+    private string _performanceSessionSimulatorId = "";
     private IReadOnlyList<PerformanceTrendEntry> _performanceTrend = [];
     private MsfsDisplaySettings? _currentDisplaySettings;
     private MsfsOnlineHealthReport? _lastOnlineHealth;
@@ -69,6 +73,7 @@ public partial class MainWindow : Window
         _paths.EnsureCreated();
         var logger = new FileLogger(_paths.LogFile);
         var commands = new CommandRunner();
+        _simulatorVersionReader = new SimulatorVersionReader(commands);
         _onlineServicesHealth = new MsfsOnlineServicesHealthChecker(commands);
         _performanceHistoryStore = new PerformanceHistoryStore(_paths.PerformanceHistoryFile);
         var optimizer = new TransactionalOptimizer(commands, _paths, logger);
@@ -504,26 +509,7 @@ public partial class MainWindow : Window
         VrRuntimeAlignmentText.Text = "RUNTIME ALIGNMENT  /  " + alignment.Detail;
         VrRuntimeAlignmentText.Foreground = HealthBrush(alignment.Health);
         VrRuntimeNameText.Text = "ACTIVE RUNTIME  /  " + report.RuntimeName;
-        VrRuntimeApiText.Text = "OPENXR API  /  " + report.ApiVersion;
-        VrRuntimeManifestText.Text = "MANIFEST  /  " + report.RuntimeManifest;
-        VrRuntimeManifestText.ToolTip = report.RuntimeManifest;
-        VrRuntimeProcessesText.Text = "RUNNING  /  " + (report.RunningComponents.Count == 0
-            ? "No recognized runtime process detected"
-            : string.Join(", ", report.RunningComponents));
         VrHeadsetText.Text = "HEADSET  /  " + report.Display.Headset;
-        VrDisplayTimingText.Text = $"REFRESH / RENDER SCALE  /  {report.Display.RefreshRate}  /  {report.Display.RenderScale}";
-        VrMotionText.Text = "MOTION REPROJECTION  /  " + report.Display.MotionReprojection;
-        VrMotionText.ToolTip = report.Display.Source;
-        VrLayersText.Text = "IMPLICIT LAYERS  /  " + (report.ActiveImplicitLayers.Count == 0
-            ? "None active"
-            : string.Join(", ", report.ActiveImplicitLayers.Select(layer => $"{layer.Name} ({layer.Scope})")));
-        VrLayersText.ToolTip = report.ActiveImplicitLayers.Count == 0
-            ? "No enabled implicit OpenXR layer registration was found."
-            : string.Join(Environment.NewLine, report.ActiveImplicitLayers.Select(layer => $"{layer.Name} / {layer.ManifestPath}"));
-        VrOverridesText.Text = "ENVIRONMENT OVERRIDES  /  " + (report.EnvironmentOverrides.Count == 0
-            ? "NONE"
-            : string.Join("  |  ", report.EnvironmentOverrides));
-        VrOverridesText.ToolTip = VrOverridesText.Text;
         var launchers = Enum.GetValues<VrRuntimePreference>()
             .Where(runtime => runtime != VrRuntimePreference.None)
             .Select(runtime => _vrRuntimeLauncher.CheckAvailability(runtime))
@@ -640,20 +626,94 @@ public partial class MainWindow : Window
 
         PerformanceComparisonText.Text =
             $"LATEST {comparison.Latest.StartedLabel}  vs  BASELINE {comparison.Baseline.StartedLabel}\n" +
-            $"AVG FPS {Delta(comparison.AverageFpsDelta, "0.0")}  /  1% LOW {Delta(comparison.OnePercentLowDelta, "0.0")}  /  " +
+            $"AVG FPS {Delta(comparison.AverageFpsDelta, "0.0")}  /  " +
             $"MAIN THREAD {Delta(comparison.MainThreadMsDelta, "0.0", " ms")}  /  " +
             $"STUTTERS/MIN {Delta(comparison.StuttersPerMinuteDelta, "0.0")}  /  SPIKES/MIN {Delta(comparison.CpuSpikesPerMinuteDelta, "0.0")}";
     }
 
-    private void BeginPerformanceSession(int processId)
+    private PerformanceTrendEntry[] SelectedPerformanceHistoryEntries() =>
+        PerformanceHistoryGrid.SelectedItems.OfType<PerformanceTrendEntry>().ToArray();
+
+    private async void SavePerformanceHistoryButton_Click(object sender, RoutedEventArgs e)
     {
+        var selected = SelectedPerformanceHistoryEntries();
+        if (selected.Length == 0)
+        {
+            MessageBox.Show("Select one or more history records to save.", "Save Performance Comparison",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var dialog = new SaveFileDialog
+        {
+            Title = "Save Performance Comparison",
+            Filter = "VR Auto-Optimizer comparison (*.json)|*.json|All files (*.*)|*.*",
+            DefaultExt = ".json",
+            AddExtension = true,
+            FileName = $"VR-Auto-Optimizer-comparison-{DateTime.Now:yyyy-MM-dd-HHmm}.json"
+        };
+        if (dialog.ShowDialog(this) != true) return;
+
+        try
+        {
+            var document = new PerformanceComparisonExportDocument
+            {
+                ExportedAt = DateTimeOffset.Now,
+                Sessions = selected.Select(entry => entry.Session).OrderBy(session => session.StartedAt).ToList()
+            };
+            await JsonStore.SaveAtomicAsync(dialog.FileName, document);
+            AppendStatus($"Saved {selected.Length} performance comparison record(s): {dialog.FileName}");
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show("The selected comparison records could not be saved: " + exception.Message,
+                "Save Performance Comparison", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private async void DeletePerformanceHistoryButton_Click(object sender, RoutedEventArgs e)
+    {
+        var selected = SelectedPerformanceHistoryEntries();
+        if (selected.Length == 0)
+        {
+            MessageBox.Show("Select one or more history records to delete.", "Delete Performance History",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var noun = selected.Length == 1 ? "record" : "records";
+        if (MessageBox.Show(
+                $"Permanently delete the selected {selected.Length} performance history {noun}?\n\nThis changes future comparisons and cannot be undone.",
+                "Delete Performance History", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+            return;
+
+        try
+        {
+            var removed = await _performanceHistoryStore.DeleteAsync(selected.Select(entry => entry.Session.Id));
+            await RefreshPerformanceHistoryAsync();
+            AppendStatus($"Deleted {removed} performance history record(s).");
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show("The selected history records could not be deleted: " + exception.Message,
+                "Delete Performance History", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private async Task BeginPerformanceSessionAsync(int processId)
+    {
+        var simulator = SimulatorCombo.SelectedItem as DetectedSimulator;
+        var simulatorId = simulator?.Definition.Id ?? "";
+        var simulatorVersion = await _simulatorVersionReader.ReadAsync(processId, simulatorId);
         lock (_performanceSessionGate)
         {
             _performanceSessionSamples.Clear();
             _performanceSessionStartedAt = DateTimeOffset.Now;
-            _performanceSessionSimulator = (SimulatorCombo.SelectedItem as DetectedSimulator)?.Name ?? "Flight simulator";
+            _performanceSessionSimulator = simulator?.Name ?? "Flight simulator";
             _performanceSessionProfile = _config.Options.Profile.ToString();
-            _performanceSessionSimulatorVersion = ReadProcessVersion(processId);
+            _performanceSessionSimulatorVersion = simulatorVersion;
+            _performanceSessionProcessId = processId;
+            _performanceSessionSimulatorId = simulatorId;
             var drivers = GpuDriverInfoReader.Read();
             _performanceSessionGpuDriverVersion = drivers.Count == 0
                 ? "Unknown"
@@ -669,11 +729,31 @@ public partial class MainWindow : Window
         {
             _performanceSessionSamples.Clear();
             _performanceSessionStartedAt = null;
+            _performanceSessionProcessId = null;
+            _performanceSessionSimulatorId = "";
         }
     }
 
     private async Task CompletePerformanceSessionAsync()
     {
+        int? processId;
+        string simulatorId;
+        string simulatorVersion;
+        lock (_performanceSessionGate)
+        {
+            processId = _performanceSessionProcessId;
+            simulatorId = _performanceSessionSimulatorId;
+            simulatorVersion = _performanceSessionSimulatorVersion;
+        }
+        if (processId.HasValue && simulatorVersion.Equals("Unknown", StringComparison.OrdinalIgnoreCase))
+        {
+            var retry = await _simulatorVersionReader.ReadAsync(processId.Value, simulatorId);
+            if (!retry.Equals("Unknown", StringComparison.OrdinalIgnoreCase))
+            {
+                lock (_performanceSessionGate) _performanceSessionSimulatorVersion = retry;
+            }
+        }
+
         PerformanceSessionSummary? summary;
         lock (_performanceSessionGate)
         {
@@ -683,6 +763,8 @@ public partial class MainWindow : Window
                     _performanceSessionSimulatorVersion, _performanceSessionGpuDriverVersion, _performanceSessionOptimizerVersion)
                 : null;
             _performanceSessionStartedAt = null;
+            _performanceSessionProcessId = null;
+            _performanceSessionSimulatorId = "";
             _performanceSessionSamples.Clear();
         }
         if (summary is null) return;
@@ -743,7 +825,8 @@ public partial class MainWindow : Window
                       $"{enabledCompanions.Count(item => item.LaunchTiming == CompanionLaunchTiming.BeforeSimulator)} before the simulator, " +
                       $"{enabledCompanions.Count(item => item.LaunchTiming == CompanionLaunchTiming.AfterSimulatorStarts)} after it starts, and " +
                       $"{enabledCompanions.Count(item => item.LaunchTiming == CompanionLaunchTiming.ReadyToFly)} when ready to fly. " +
-                      $"{enabledCompanions.Count(item => item.RunAsAdministrator)} request administrator access and " +
+                      $"{enabledCompanions.Count(item => item.RunAsAdministrator)} request administrator access, " +
+                      $"{enabledCompanions.Count(item => item.MinimizeAfterLaunch)} will minimize after launch, and " +
                       $"{enabledCompanions.Count(item => item.CleanupAction == CompanionCleanupAction.CloseOnSessionEnd)} will close after the flight."),
             new("Performance actions", PreflightStatus.Action,
                 tuning.Count == 0 ? "No optional performance actions are selected." : string.Join(", ", tuning) + ".")
@@ -1306,6 +1389,7 @@ public partial class MainWindow : Window
             Name = Path.GetFileNameWithoutExtension(executablePath),
             ExecutablePath = executablePath,
             RunAsAdministrator = false,
+            MinimizeAfterLaunch = false,
             LaunchTiming = CompanionLaunchTiming.BeforeSimulator,
             CleanupAction = CompanionCleanupAction.LeaveRunning
         };
@@ -1374,12 +1458,14 @@ public partial class MainWindow : Window
             {
                 var simulatorName = (SimulatorCombo.SelectedItem as DetectedSimulator)?.Name ?? "Flight simulator";
                 _toolbarTelemetry.BeginSession(simulatorName, _config.Options.UseOpenXrTurboMode);
-                BeginPerformanceSession(processId.Value);
+                await BeginPerformanceSessionAsync(processId.Value);
                 _dashboardHistory.Clear();
                 DashFps.Text = "—";
                 DashAverageFps.Text = "—";
-                DashOneLow.Text = "—";
-                DashFrameTime.Text = "—";
+                DashGpuLoad.Text = "—";
+                DashGpuMemory.Text = "—";
+                DashGpuLoad.ToolTip = "Waiting for GPU-Z sensors";
+                DashGpuMemory.ToolTip = "Waiting for GPU-Z sensors";
                 FpsGraphLine.Points.Clear();
                 _dashboardStutterCount = 0;
                 _dashboardCpuSpikeCount = 0;
@@ -1421,8 +1507,8 @@ public partial class MainWindow : Window
                 if (_performanceSessionSamples.Count > 120_000) _performanceSessionSamples.RemoveAt(0);
             }
         }
-        _toolbarTelemetry.Publish(sample);
-        Dispatcher.BeginInvoke(() => UpdateDashboard(sample));
+        var gpu = _toolbarTelemetry.Publish(sample);
+        Dispatcher.BeginInvoke(() => UpdateDashboard(sample, gpu));
     }
 
     private void ResetDashboardStuttersButton_Click(object sender, RoutedEventArgs e)
@@ -1541,7 +1627,7 @@ public partial class MainWindow : Window
             });
     }
 
-    private void UpdateDashboard(PerformanceTelemetrySample sample)
+    private void UpdateDashboard(PerformanceTelemetrySample sample, GpuTelemetrySnapshot gpu)
     {
         _dashboardHistory.Enqueue(sample);
         while (_dashboardHistory.Count > 120) _dashboardHistory.Dequeue();
@@ -1550,8 +1636,10 @@ public partial class MainWindow : Window
 
         if (sample.Fps.HasValue) DashFps.Text = FormatMetric(sample.Fps, "0.0");
         if (sample.AverageFps.HasValue) DashAverageFps.Text = FormatMetric(sample.AverageFps, "0.0");
-        if (sample.OnePercentLowFps.HasValue) DashOneLow.Text = FormatMetric(sample.OnePercentLowFps, "0.0");
-        if (sample.FrameTimeMs.HasValue) DashFrameTime.Text = FormatMetric(sample.FrameTimeMs, "0.0");
+        DashGpuLoad.Text = gpu.LoadPercent.HasValue ? $"{gpu.LoadPercent.Value:0.0}%" : "—";
+        DashGpuMemory.Text = gpu.MemoryUsedPercent.HasValue ? $"{gpu.MemoryUsedPercent.Value:0.0}%" : "—";
+        DashGpuLoad.ToolTip = gpu.Status;
+        DashGpuMemory.ToolTip = gpu.Status;
         DashProcessCpu.Text = $"{sample.SimulatorCpuPercent:0.0}%";
         DashMainThread.Text = sample.MainThreadFrameTimeMs.HasValue
             ? $"{sample.MainThreadFrameTimeMs.Value:0.0} ms"
@@ -1594,12 +1682,11 @@ public partial class MainWindow : Window
         var height = PerformanceTrendCanvas.ActualHeight;
         if (_performanceTrend.Count == 0 || width <= 0 || height <= 0) return;
         var maximum = Math.Max(60, Math.Ceiling(_performanceTrend
-            .SelectMany(entry => new[] { entry.Session.AverageFps, entry.Session.OnePercentLowFps })
+            .Select(entry => entry.Session.AverageFps)
             .Where(value => value.HasValue).Select(value => value!.Value).DefaultIfEmpty(60).Max() / 30) * 30);
         PerformanceTrendScaleText.Text = $"0–{maximum:0} FPS";
 
         AddLine(entry => entry.Session.AverageFps, (Brush)FindResource("CyanBrush"), 2.2);
-        AddLine(entry => entry.Session.OnePercentLowFps, (Brush)FindResource("GreenBrush"), 1.8);
         for (var index = 1; index < _performanceTrend.Count; index++)
         {
             if (_performanceTrend[index].Changes == "—") continue;
@@ -1659,20 +1746,6 @@ public partial class MainWindow : Window
             points.Add(new Point(x, y));
         }
         return points;
-    }
-
-    private static string ReadProcessVersion(int processId)
-    {
-        try
-        {
-            using var process = Process.GetProcessById(processId);
-            var information = process.MainModule?.FileVersionInfo;
-            return information?.ProductVersion ?? information?.FileVersion ?? "Unknown";
-        }
-        catch (Exception exception) when (exception is InvalidOperationException or Win32Exception or NotSupportedException)
-        {
-            return "Unknown";
-        }
     }
 
     private static string FormatMetric(double? value, string format) => value?.ToString(format) ?? "—";
@@ -2287,6 +2360,7 @@ public partial class MainWindow : Window
     {
         Enabled = rule.Enabled,
         RunAsAdministrator = rule.RunAsAdministrator,
+        MinimizeAfterLaunch = rule.MinimizeAfterLaunch,
         Name = rule.Name ?? "",
         ExecutablePath = rule.ExecutablePath ?? "",
         LaunchTiming = rule.LaunchTiming,

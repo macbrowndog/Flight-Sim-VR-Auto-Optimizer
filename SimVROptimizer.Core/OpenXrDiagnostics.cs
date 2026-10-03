@@ -26,7 +26,7 @@ public sealed record OpenXrDiagnosticReport(
     IReadOnlyList<OpenXrLayerInfo> ActiveImplicitLayers,
     IReadOnlyList<string> EnvironmentOverrides);
 
-/// <summary>Inspects standard OpenXR loader registrations without loading or changing a runtime.</summary>
+/// <summary>Inspects OpenXR registrations and saved diagnostics without loading or touching the active runtime.</summary>
 public static class OpenXrDiagnostics
 {
     public const string RuntimeRegistryPath = @"SOFTWARE\Khronos\OpenXR\1";
@@ -51,6 +51,8 @@ public static class OpenXrDiagnostics
         var layers = ReadImplicitLayers();
         var running = RuntimeProcesses.Where(IsRunning).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var (runtimeName, apiVersion) = ReadRuntimeManifest(runtimePath);
+        if (IsPimaxRuntime(runtimeName, runtimePath) && apiVersion == "Not declared")
+            apiVersion = "Not declared by Pimax manifest";
         var display = ReadDisplaySettings(runtimeName, runtimePath);
 
         DiagnosticHealth health;
@@ -152,6 +154,19 @@ public static class OpenXrDiagnostics
         }
     }
 
+    public static string? ParsePimaxHeadsetLog(string text)
+    {
+        const string marker = "This device is ";
+        foreach (var line in text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).Reverse())
+        {
+            var markerIndex = line.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+            if (markerIndex < 0) continue;
+            var name = line[(markerIndex + marker.Length)..].Trim().TrimEnd('.', ';');
+            if (!string.IsNullOrWhiteSpace(name)) return name;
+        }
+        return null;
+    }
+
     private static (string Name, string ApiVersion) ReadRuntimeManifest(string? path)
     {
         var fallback = GuessRuntimeName(path);
@@ -165,6 +180,13 @@ public static class OpenXrDiagnostics
 
     private static VrDisplayDiagnostic ReadDisplaySettings(string runtimeName, string? runtimePath)
     {
+        if (IsPimaxRuntime(runtimeName, runtimePath))
+        {
+            var headset = ReadPimaxHeadsetFromLogs() ?? "Not recorded in Pimax device log";
+            return new(headset, "Pimax Play setting", "Pimax Play setting", "Smart Smoothing / Pimax Play",
+                "Passive Pimax manifest and device-log inspection only; the active runtime is never loaded by diagnostics");
+        }
+
         if (!runtimeName.Contains("Steam", StringComparison.OrdinalIgnoreCase)
             && !(runtimePath?.Contains("steam", StringComparison.OrdinalIgnoreCase) ?? false))
             return new("Not exposed", "Not exposed", "Not exposed", "Not exposed", "Active runtime does not publish these values for external read-only inspection");
@@ -177,6 +199,31 @@ public static class OpenXrDiagnostics
         }
         return new("Not reported", "Not reported", "Not reported", "Not reported", "SteamVR settings file not found");
     }
+
+    private static string? ReadPimaxHeadsetFromLogs()
+    {
+        try
+        {
+            var logDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "pimax", "slam");
+            if (!Directory.Exists(logDirectory)) return null;
+            foreach (var path in Directory.EnumerateFiles(logDirectory, "6DOF_*.txt")
+                         .OrderByDescending(File.GetLastWriteTimeUtc).Take(8))
+            {
+                try
+                {
+                    var detected = ParsePimaxHeadsetLog(File.ReadAllText(path));
+                    if (!string.IsNullOrWhiteSpace(detected)) return detected;
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { }
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { }
+        return null;
+    }
+
+    private static bool IsPimaxRuntime(string runtimeName, string? runtimePath) =>
+        runtimeName.Contains("Pimax", StringComparison.OrdinalIgnoreCase)
+        || (runtimePath?.Contains("pimax", StringComparison.OrdinalIgnoreCase) ?? false);
 
     private static IEnumerable<string> SteamVrSettingsCandidates()
     {

@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.4.2 — 2026-10-03
+
+- Normalized DLSS file-version formatting to full-stop separators and preserved all four components, for example `DLSS v310.9.1.0` instead of `DLSS v310,9,1,0`.
+- Expanded Pimax diagnostics with passive manifest and device-log inspection that identifies the headset without loading or disturbing the active OpenXR runtime.
+- Simplified the visible VR runtime panel to show launcher status, runtime alignment, active runtime, headset and available launchers; removed the OpenXR API, manifest, running-process, display-target, motion-reprojection, implicit-layer and environment-override rows.
+- Added sortable performance-history columns with typed date and numeric ordering.
+- Added multi-select comparison export to portable JSON files and confirmed deletion of unwanted saved history records.
+- Aligned session history with the current dashboard by removing the obsolete 1% Low column, comparison label and green trend line.
+- Fixed Microsoft Store simulator versions appearing as **Unknown** in session history by reading installed package metadata, with executable metadata fallback and an end-of-session retry.
+- Replaced the MSFS toolbar's **1% Low** and **Frame MS** cards with live **GPU Load** and **GPU Memory** readings from GPU-Z shared memory. GPU Memory is shown as a percentage of total VRAM, with used/total MB retained in the hover detail.
+- Matched the desktop Dashboard to the toolbar with the same GPU Load, VRAM usage percentage and Sim Memory cards, fed from the exact same GPU-Z sample.
+- Added safe GPU-Z unavailable, updating and stale-data handling; simulator process memory remains visible as **Sim Memory**.
+- Added a profile-owned **Minimize After Launch** option for companion apps. The optimizer waits for the newly launched app's normal window and minimizes it without affecting matching apps that were already running.
+- Expanded automated coverage to 62 passing tests.
+
 ## 2.4.1 — 2026-09-26
 
 - Added profile-owned companion-app preloading for Active Sky, SayIntentions, REX Core Atmos and other external tools.

@@ -590,6 +590,7 @@ public sealed class CompanionApplicationRule
 
     public bool Enabled { get; set; } = true;
     public bool RunAsAdministrator { get; set; }
+    public bool MinimizeAfterLaunch { get; set; }
     public string Name { get; set; } = "";
     public string ExecutablePath { get; set; } = "";
     public CompanionLaunchTiming LaunchTiming { get; set; } = CompanionLaunchTiming.BeforeSimulator;

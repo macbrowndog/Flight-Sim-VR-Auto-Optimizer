@@ -85,14 +85,14 @@ public static class NvidiaDlssSettingsReader
             || dlssLibraryVersion.Equals("Unavailable", StringComparison.OrdinalIgnoreCase))
             return "DLSS";
 
-        var versionText = dlssLibraryVersion.Trim();
+        var versionText = NormalizeVersion(dlssLibraryVersion.Trim());
         var metadataIndex = versionText.IndexOfAny([' ', '(', '+']);
         if (metadataIndex > 0) versionText = versionText[..metadataIndex];
         if (Version.TryParse(versionText.TrimStart('v', 'V'), out var version))
         {
-            versionText = version.Revision == 0
-                ? $"{version.Major}.{version.Minor}.{version.Build}"
-                : version.ToString();
+            versionText = version.Revision >= 0
+                ? version.ToString(4)
+                : version.Build >= 0 ? version.ToString(3) : version.ToString();
         }
         return "DLSS v" + versionText.TrimStart('v', 'V');
     }
@@ -124,7 +124,7 @@ public static class NvidiaDlssSettingsReader
                             try
                             {
                                 var version = module.FileVersionInfo;
-                                return version.FileVersion ?? version.ProductVersion ?? "Unknown";
+                                return NormalizeVersion(version.FileVersion ?? version.ProductVersion ?? "Unknown");
                             }
                             catch (Exception exception) when (exception is InvalidOperationException
                                 or System.ComponentModel.Win32Exception
@@ -166,6 +166,8 @@ public static class NvidiaDlssSettingsReader
         }
         return newestText ?? "Not available";
     }
+
+    private static string NormalizeVersion(string value) => value.Replace(',', '.');
 
     private static string FindNvidiaRuntimeDlssVersion()
     {

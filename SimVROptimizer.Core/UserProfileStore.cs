@@ -211,6 +211,7 @@ public static class UserProfileStore
     {
         Enabled = source.Enabled,
         RunAsAdministrator = source.RunAsAdministrator,
+        MinimizeAfterLaunch = source.MinimizeAfterLaunch,
         Name = source.Name,
         ExecutablePath = source.ExecutablePath,
         LaunchTiming = source.LaunchTiming,
@@ -253,7 +254,7 @@ public static class UserProfileStore
         .OrderBy(value => value, StringComparer.OrdinalIgnoreCase));
 
     private static string CompanionRules(IEnumerable<CompanionApplicationRule> rules) => string.Join(" | ", rules
-        .Select(rule => $"{rule.Enabled}:{rule.RunAsAdministrator}:{rule.Name}:{rule.ExecutablePath}:{rule.LaunchTiming}:{rule.LaunchDelaySeconds}:{rule.CleanupAction}")
+        .Select(rule => $"{rule.Enabled}:{rule.RunAsAdministrator}:{rule.MinimizeAfterLaunch}:{rule.Name}:{rule.ExecutablePath}:{rule.LaunchTiming}:{rule.LaunchDelaySeconds}:{rule.CleanupAction}")
         .OrderBy(value => value, StringComparer.OrdinalIgnoreCase));
 
     private static string Format(object? value) => value switch

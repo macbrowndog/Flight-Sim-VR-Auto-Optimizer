@@ -99,8 +99,15 @@ class IngamePanelFlightDeckToolsDashboard extends TemplateElement {
     if (sample) {
       this.setMetric("fps", sample.fps, 1);
       this.setMetric("average", sample.averageFps, 1);
-      this.setMetric("one-low", sample.onePercentLowFps, 1);
-      this.setMetric("frame-ms", sample.frameTimeMs, 1);
+      const gpu = frame.gpu || {};
+      this.setText("gpu-load", this.value(gpu.loadPercent) === null
+        ? "—"
+        : this.number(gpu.loadPercent, 1) + "%");
+      this.setText("gpu-memory", this.value(gpu.memoryUsedPercent) === null
+        ? "—"
+        : this.number(gpu.memoryUsedPercent, 1) + "%");
+      this.setTitle("gpu-load", gpu.status || "GPU-Z sensor data unavailable");
+      this.setTitle("gpu-memory", gpu.status || "GPU-Z sensor data unavailable");
       this.setText("sim-cpu", this.number(sample.simulatorCpuPercent, 1) + "%");
       this.setText("main-thread", sample.mainThreadFrameTimeMs == null
         ? "—"
@@ -275,6 +282,11 @@ class IngamePanelFlightDeckToolsDashboard extends TemplateElement {
   setText(id, text) {
     const element = document.getElementById(id);
     if (element) element.textContent = text;
+  }
+
+  setTitle(id, text) {
+    const element = document.getElementById(id);
+    if (element) element.setAttribute("title", text);
   }
 
   pushHistory(history, value) {

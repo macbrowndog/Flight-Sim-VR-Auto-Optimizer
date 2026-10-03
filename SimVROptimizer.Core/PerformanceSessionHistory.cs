@@ -31,12 +31,17 @@ public sealed record PerformanceSessionSummary(
 
 public sealed record PerformanceTrendEntry(PerformanceSessionSummary Session, string Changes)
 {
+    public DateTimeOffset StartedAt => Session.StartedAt;
     public string StartedLabel => Session.StartedLabel;
     public string Simulator => Session.Simulator;
     public string Profile => Session.Profile;
+    public double DurationMinutes => Session.DurationMinutes;
     public string DurationLabel => Session.DurationLabel;
+    public double? AverageFps => Session.AverageFps;
     public string AverageFpsLabel => Session.AverageFpsLabel;
+    public double? OnePercentLowFps => Session.OnePercentLowFps;
     public string OnePercentLowLabel => Session.OnePercentLowLabel;
+    public double? AverageMainThreadMs => Session.AverageMainThreadMs;
     public string MainThreadLabel => Session.MainThreadLabel;
     public int StutterCount => Session.StutterCount;
     public int CpuSpikeCount => Session.CpuSpikeCount;
@@ -46,6 +51,12 @@ public sealed record PerformanceTrendEntry(PerformanceSessionSummary Session, st
 
 public sealed class PerformanceHistoryDocument
 {
+    public List<PerformanceSessionSummary> Sessions { get; set; } = [];
+}
+
+public sealed class PerformanceComparisonExportDocument
+{
+    public DateTimeOffset ExportedAt { get; set; } = DateTimeOffset.Now;
     public List<PerformanceSessionSummary> Sessions { get; set; } = [];
 }
 
@@ -168,6 +179,26 @@ public sealed class PerformanceHistoryStore
             document.Sessions.Add(summary);
             document.Sessions = document.Sessions.OrderByDescending(session => session.StartedAt).Take(100).ToList();
             await JsonStore.SaveAtomicAsync(_path, document, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<int> DeleteAsync(IEnumerable<Guid> sessionIds, CancellationToken cancellationToken = default)
+    {
+        var ids = sessionIds.ToHashSet();
+        if (ids.Count == 0) return 0;
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var document = await JsonStore.LoadOrDefaultAsync(_path, () => new PerformanceHistoryDocument(), cancellationToken).ConfigureAwait(false);
+            var removed = document.Sessions.RemoveAll(session => ids.Contains(session.Id));
+            if (removed > 0)
+                await JsonStore.SaveAtomicAsync(_path, document, cancellationToken).ConfigureAwait(false);
+            return removed;
         }
         finally
         {

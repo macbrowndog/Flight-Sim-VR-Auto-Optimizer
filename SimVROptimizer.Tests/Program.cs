@@ -1,5 +1,6 @@
 using System.Net.Sockets;
 using System.Net.WebSockets;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -47,6 +48,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Xbox post-flight online stack preservation", TestXboxSessionCleanupAsync),
     ("Performance telemetry calculations", TestPerformanceTelemetryAsync),
     ("Performance session history comparison", TestPerformanceSessionHistoryAsync),
+    ("Performance history deletion and comparison export", TestPerformanceHistoryManagementAsync),
+    ("Simulator version detection", TestSimulatorVersionDetectionAsync),
     ("Privacy-scrubbed support package", TestSupportPackageAsync),
     ("OpenXR diagnostics parsing", TestOpenXrDiagnosticsAsync),
     ("MSFS online-services health parsing", TestMsfsOnlineHealthParsingAsync),
@@ -55,6 +58,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("NVIDIA DLSS model preset mapping", TestNvidiaDlssPresetMappingAsync),
     ("NVIDIA DLSS information overlay values", TestNvidiaDlssIndicatorValuesAsync),
     ("Performance monitor sampling", TestPerformanceMonitorSamplingAsync),
+    ("GPU-Z shared-memory sensor parsing", TestGpuZSharedMemoryParsingAsync),
     ("VR toolbar telemetry bridge", TestToolbarTelemetryBridgeAsync),
     ("VR toolbar package installer", TestToolbarPackageInstallerAsync),
     ("Log rotation", TestLogRotationAsync),
@@ -859,6 +863,7 @@ static async Task TestNamedUserProfilesAsync()
             {
                 Name = "Active Sky", ExecutablePath = @"C:\Tools\ActiveSky.exe",
                 RunAsAdministrator = true,
+                MinimizeAfterLaunch = true,
                 LaunchTiming = CompanionLaunchTiming.BeforeSimulator, LaunchDelaySeconds = 8,
                 CleanupAction = CompanionCleanupAction.CloseOnSessionEnd
             }
@@ -891,6 +896,7 @@ static async Task TestNamedUserProfilesAsync()
     Equal("ExampleTool", saved.CustomApplications[0].ProcessName);
     Equal("Active Sky", saved.CompanionApplications[0].Name);
     Equal(true, saved.CompanionApplications[0].RunAsAdministrator);
+    Equal(true, saved.CompanionApplications[0].MinimizeAfterLaunch);
     Equal("Fenix A320", saved.Associations.Aircraft);
 
     var differences = UserProfileStore.Diff(config, saved, associations);
@@ -906,6 +912,7 @@ static async Task TestNamedUserProfilesAsync()
     Equal(true, config.ServiceSelections["sysmain"]);
     Equal(ApplicationAfterFlightAction.Restart, config.ApplicationAfterFlightActions["exampletool"]);
     Equal(CompanionCleanupAction.CloseOnSessionEnd, config.CompanionApplications[0].CleanupAction);
+    Equal(true, config.CompanionApplications[0].MinimizeAfterLaunch);
 
     config.Options.LaunchTimeoutSeconds = 300;
     UserProfileStore.SaveOrReplace(config, "MSFS VR");
@@ -922,6 +929,7 @@ static async Task TestNamedUserProfilesAsync()
     Equal(ApplicationAfterFlightAction.Restart, loaded.SavedProfiles[0].ApplicationAfterFlightActions["exampletool"]);
     Equal(8, loaded.SavedProfiles[0].CompanionApplications[0].LaunchDelaySeconds);
     Equal(true, loaded.SavedProfiles[0].CompanionApplications[0].RunAsAdministrator);
+    Equal(true, loaded.SavedProfiles[0].CompanionApplications[0].MinimizeAfterLaunch);
     var duplicate = UserProfileStore.Duplicate(loaded, "MSFS VR", "MSFS VR Copy");
     Equal("Fenix A320", duplicate.Associations.Aircraft);
     var renamed = UserProfileStore.Rename(loaded, "MSFS VR Copy", "Airliner VR");
@@ -1001,6 +1009,14 @@ static async Task TestCompanionApplicationRulesAsync()
     Equal(CompanionCleanupAction.CloseOnSessionEnd, selectable.CleanupAction);
     Equal("READY TO FLY", selectable.SelectedLaunchTiming);
     Equal("CLOSE ON SESSION END", selectable.SelectedCleanupAction);
+    Equal(false, selectable.MinimizeAfterLaunch);
+
+    using (var currentProcess = Process.GetCurrentProcess())
+    {
+        var minimized = await new ProcessWindowMinimizer().MinimizeWhenReadyAsync(
+            currentProcess, TimeSpan.Zero, CancellationToken.None);
+        Equal(false, minimized);
+    }
 
     var directory = Path.Combine(AppContext.BaseDirectory, "test-data", Guid.NewGuid().ToString("N"));
     var logger = new FileLogger(Path.Combine(directory, "companion.log"));
@@ -1257,6 +1273,61 @@ static Task TestPerformanceSessionHistoryAsync()
     return Task.CompletedTask;
 }
 
+static async Task TestPerformanceHistoryManagementAsync()
+{
+    var directory = Path.Combine(AppContext.BaseDirectory, "test-data", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(directory);
+    try
+    {
+        var path = Path.Combine(directory, "performance-history.json");
+        var store = new PerformanceHistoryStore(path);
+        var started = new DateTimeOffset(2026, 9, 26, 10, 0, 0, TimeSpan.Zero);
+        var first = new PerformanceSessionSummary(Guid.NewGuid(), started, "MSFS 2024", "Standard", 10, 10, 10,
+            60, 48, 16.7, 20, 10, 8, 8000, 2, 1, "SimConnect");
+        var second = first with { Id = Guid.NewGuid(), StartedAt = started.AddHours(1), AverageFps = 65 };
+        await store.AppendAsync(first);
+        await store.AppendAsync(second);
+
+        Equal(1, await store.DeleteAsync([first.Id]));
+        var remaining = await store.LoadAsync();
+        Equal(1, remaining.Count);
+        Equal(second.Id, remaining[0].Id);
+        Equal(0, await store.DeleteAsync([Guid.NewGuid()]));
+
+        var exportPath = Path.Combine(directory, "comparison.json");
+        await JsonStore.SaveAtomicAsync(exportPath, new PerformanceComparisonExportDocument
+        {
+            Sessions = [second]
+        });
+        var exported = await JsonStore.LoadRequiredAsync<PerformanceComparisonExportDocument>(exportPath);
+        Equal(1, exported.Sessions.Count);
+        Equal(second.Id, exported.Sessions[0].Id);
+    }
+    finally
+    {
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static async Task TestSimulatorVersionDetectionAsync()
+{
+    var commands = new FakeCommandRunner
+    {
+        Handler = (file, args) => file.Equals("powershell.exe", StringComparison.OrdinalIgnoreCase)
+            && args.Any(argument => argument.Contains("Microsoft.Limitless", StringComparison.Ordinal))
+                ? Ok("1.6.42.0\r\n")
+                : new CommandResult(1, "", "not found")
+    };
+    var reader = new SimulatorVersionReader(commands);
+    Equal("1.6.42.0", await reader.ReadAsync(int.MaxValue, "msfs2024-store"));
+    True(commands.Calls.Any(call => call.Args.Any(argument =>
+        argument.Contains("Get-AppxPackage", StringComparison.Ordinal))));
+
+    Equal("Unknown", await reader.ReadAsync(int.MaxValue, "msfs2024-steam"));
+    commands.Handler = (_, _) => new CommandResult(1, "", "not found");
+    Equal("Unknown", await reader.ReadAsync(int.MaxValue, "msfs2024-store"));
+}
+
 static async Task TestSupportPackageAsync()
 {
     var directory = Path.Combine(AppContext.BaseDirectory, "test-data", Guid.NewGuid().ToString("N"));
@@ -1319,6 +1390,7 @@ static Task TestOpenXrDiagnosticsAsync()
     Equal("90 Hz", display.RefreshRate);
     Equal("150%", display.RenderScale);
     Equal("OFF", display.MotionReprojection);
+    Equal("Pimax Crystal Light", OpenXrDiagnostics.ParsePimaxHeadsetLog("[12:00:00] This device is Pimax Crystal Light\r\n"));
     Equal(DiagnosticHealth.Ready, OpenXrDiagnostics.EvaluateRuntimeAlignment(VrRuntimePreference.PimaxPlay, "Pimax OpenXR").Health);
     Equal(DiagnosticHealth.Ready, OpenXrDiagnostics.EvaluateRuntimeAlignment(VrRuntimePreference.VirtualDesktop, "VDXR").Health);
     Equal(DiagnosticHealth.Review, OpenXrDiagnostics.EvaluateRuntimeAlignment(VrRuntimePreference.SteamVR, "Pimax OpenXR").Health);
@@ -1420,7 +1492,8 @@ static Task TestNvidiaDlssPresetMappingAsync()
     Equal("Preset A", NvidiaDlssSettingsReader.FormatPreset(1, 1));
     Equal("Preset K", NvidiaDlssSettingsReader.FormatPreset(1, 11));
     Equal("Preset Z", NvidiaDlssSettingsReader.FormatPreset(1, 26));
-    Equal("DLSS v310.9.0", NvidiaDlssSettingsReader.FormatRenderingLabel("DLSS", "310.9.0.0"));
+    Equal("DLSS v310.9.0.0", NvidiaDlssSettingsReader.FormatRenderingLabel("DLSS", "310.9.0.0"));
+    Equal("DLSS v310.9.1.0", NvidiaDlssSettingsReader.FormatRenderingLabel("DLSS", "310,9,1,0"));
     Equal("DLSS v310.9.1.2", NvidiaDlssSettingsReader.FormatRenderingLabel("DLSS", "310.9.1.2"));
     Equal("DLSS", NvidiaDlssSettingsReader.FormatRenderingLabel("DLSS", "Not loaded / start MSFS to read"));
     Equal("TAA", NvidiaDlssSettingsReader.FormatRenderingLabel("TAA", "310.9.0.0"));
@@ -1714,7 +1787,9 @@ static async Task TestToolbarTelemetryBridgeAsync()
     var port = ((System.Net.IPEndPoint)portProbe.LocalEndpoint).Port;
     portProbe.Stop();
 
-    await using var server = new DashboardTelemetryServer(new FileLogger(Path.Combine(directory, "toolbar.log")), port);
+    await using var server = new DashboardTelemetryServer(new FileLogger(Path.Combine(directory, "toolbar.log")), port,
+        gpuTelemetry: new FakeGpuTelemetrySource(new GpuTelemetrySnapshot(
+            97.4, 14321, 24576, 58.272298177083336, "GPU-Z live sensors")));
     await server.StartAsync();
     using var socket = new ClientWebSocket();
     await socket.ConnectAsync(new Uri(server.Endpoint), CancellationToken.None);
@@ -1731,14 +1806,23 @@ static async Task TestToolbarTelemetryBridgeAsync()
     var sample = new PerformanceTelemetrySample(
         DateTimeOffset.UtcNow, 72.5, 70.1, 55.2, 13.8, 32.4, 44.1, 67.8, 8123,
         [10.0, 20.0, 30.0, 40.0], true, true, "MSFS visual FPS via SimConnect");
-    server.Publish(sample);
+    var gpu = server.Publish(sample);
+    Equal<double?>(97.4, gpu.LoadPercent);
+    Equal<double?>(14321, gpu.MemoryUsedMb);
+    Equal<double?>(24576, gpu.TotalMemoryMb);
+    Equal<double?>(58.272298177083336, gpu.MemoryUsedPercent);
     var published = await ReceiveToolbarFrameAsync(socket);
     Equal(72.5, published.Sample!.Fps);
     Equal(1, published.StutterCount);
     Equal(1, published.CpuSpikeCount);
     Equal(4, published.Sample.LogicalProcessorUsage.Count);
     Equal(67.8, published.Sample.MainThreadFrameTimeMs);
-    Equal(5, published.SchemaVersion);
+    Equal(6, published.SchemaVersion);
+    Equal<double?>(97.4, published.Gpu.LoadPercent);
+    Equal<double?>(14321, published.Gpu.MemoryUsedMb);
+    Equal<double?>(24576, published.Gpu.TotalMemoryMb);
+    Equal<double?>(58.272298177083336, published.Gpu.MemoryUsedPercent);
+    Equal("GPU-Z live sensors", published.Gpu.Status);
     True(published.OpenXrTurboMode);
     Equal("", published.CpuName);
     Equal("ALL LOGICAL", published.ProcessorGroups.Single().Label);
@@ -1752,6 +1836,57 @@ static async Task TestToolbarTelemetryBridgeAsync()
     var spikeReset = await ReceiveToolbarFrameAsync(socket);
     Equal(0, spikeReset.StutterCount);
     Equal(0, spikeReset.CpuSpikeCount);
+}
+
+static Task TestGpuZSharedMemoryParsingAsync()
+{
+    var bytes = new byte[GpuZSharedMemoryReader.MappingSize];
+    BitConverter.GetBytes(1u).CopyTo(bytes, 0);
+    BitConverter.GetBytes(5_000u).CopyTo(bytes, 8);
+    WriteGpuZData(bytes, 0, "MemSize", "24576 MB");
+    WriteGpuZSensor(bytes, 0, "GPU Load", "%", 87.6);
+    WriteGpuZSensor(bytes, 1, "Memory Used", "MB", 12_345);
+
+    var snapshot = GpuZSharedMemoryReader.ParseSnapshot(bytes, 5_250);
+    Equal<double?>(87.6, snapshot.LoadPercent);
+    Equal<double?>(12_345, snapshot.MemoryUsedMb);
+    Equal<double?>(24_576, snapshot.TotalMemoryMb);
+    True(Math.Abs(snapshot.MemoryUsedPercent!.Value - 50.23193359375) < 0.000001);
+    True(snapshot.Status.Contains("12,345 / 24,576 MB", StringComparison.Ordinal));
+
+    WriteGpuZSensor(bytes, 1, "Memory Used", "GB", 12.5);
+    snapshot = GpuZSharedMemoryReader.ParseSnapshot(bytes, 5_250);
+    Equal<double?>(12_800, snapshot.MemoryUsedMb);
+    True(Math.Abs(snapshot.MemoryUsedPercent!.Value - 52.083333333333336) < 0.000001);
+
+    WriteGpuZData(bytes, 0, "MemSize", "");
+    snapshot = GpuZSharedMemoryReader.ParseSnapshot(bytes, 5_250);
+    Equal<double?>(null, snapshot.MemoryUsedPercent);
+    True(snapshot.Status.Contains("total VRAM", StringComparison.OrdinalIgnoreCase));
+
+    var stale = GpuZSharedMemoryReader.ParseSnapshot(bytes, 16_000);
+    Equal<double?>(null, stale.LoadPercent);
+    True(stale.Status.Contains("stale", StringComparison.OrdinalIgnoreCase));
+    return Task.CompletedTask;
+}
+
+static void WriteGpuZData(byte[] bytes, int index, string key, string value)
+{
+    const int dataRecordSize = 1024;
+    var offset = 12 + index * dataRecordSize;
+    Array.Clear(bytes, offset, dataRecordSize);
+    Encoding.Unicode.GetBytes(key).CopyTo(bytes, offset);
+    Encoding.Unicode.GetBytes(value).CopyTo(bytes, offset + 512);
+}
+
+static void WriteGpuZSensor(byte[] bytes, int index, string name, string unit, double value)
+{
+    const int sensorTableOffset = 12 + GpuZSharedMemoryReader.MaximumRecords * 1024;
+    const int sensorRecordSize = 512 + 16 + sizeof(uint) + sizeof(double);
+    var offset = sensorTableOffset + index * sensorRecordSize;
+    Encoding.Unicode.GetBytes(name).CopyTo(bytes, offset);
+    Encoding.Unicode.GetBytes(unit).CopyTo(bytes, offset + 512);
+    BitConverter.GetBytes(value).CopyTo(bytes, offset + 512 + 16 + sizeof(uint));
 }
 
 static async Task<DashboardTelemetryFrame> ReceiveToolbarFrameAsync(ClientWebSocket socket)
@@ -1863,6 +1998,11 @@ internal sealed class FakeApplicationRestarter : IApplicationRestarter
 internal sealed class FakeCpuProfileProvider(CpuProfile profile) : ICpuProfileProvider
 {
     public CpuProfile GetProfile() => profile;
+}
+
+internal sealed class FakeGpuTelemetrySource(GpuTelemetrySnapshot snapshot) : IGpuTelemetrySource
+{
+    public GpuTelemetrySnapshot Read() => snapshot;
 }
 
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
