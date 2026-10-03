@@ -193,7 +193,7 @@ Licensed under the [MIT License](LICENSE).
 
 ## Credits & Acknowledgments
 
-This project is based on the original VR Optimizer application developed by @shark. Huge thanks to @shark for open-sourcing the initial codebase and making this work possible.
+This project is based on the original VR Optimizer application developed by shark. Huge thanks to shark for open-sourcing the initial codebase and making this work possible.
 
 ## Release notes — 2.4.2
 
