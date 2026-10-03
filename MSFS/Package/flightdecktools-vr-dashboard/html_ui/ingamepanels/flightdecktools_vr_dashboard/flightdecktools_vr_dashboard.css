@@ -38,12 +38,30 @@ ingame-ui#FlightDeckToolsDashboardPanel .ingameUiWrapper > #dashboard { flex: 0 
 }
 
 .deck-header {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 12px 14px;
+  padding: 12px 52px 12px 14px;
 }
+
+.close-panel {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--deck-border);
+  color: var(--deck-text);
+  background: #172326;
+  font: 700 25px/30px Arial, sans-serif;
+  text-align: center;
+  cursor: pointer;
+}
+.close-panel:hover, .close-panel:focus { color: #fff; border-color: var(--deck-red); background: #5a2525; }
+.close-panel:active { background: #7a3030; }
 
 .eyebrow, .graph-title, label, footer {
   color: var(--deck-amber);

@@ -42,9 +42,27 @@ class IngamePanelFlightDeckToolsDashboard extends TemplateElement {
     if (resetStutters) resetStutters.addEventListener("click", () => this.resetStutters());
     const resetSpikes = document.getElementById("reset-spikes");
     if (resetSpikes) resetSpikes.addEventListener("click", () => this.resetSpikes());
+    const closePanel = document.getElementById("close-panel");
+    if (closePanel) closePanel.addEventListener("click", event => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.closePanel();
+    });
     window.addEventListener("resize", () => this.drawGraphs());
     this.connect();
     setTimeout(() => this.fitPanelHeight(), 500);
+  }
+
+  closePanel() {
+    const ui = document.querySelector("ingame-ui");
+    if (ui && typeof ui.closePanel === "function") {
+      ui.closePanel();
+      return;
+    }
+    if (typeof Coherent !== "undefined" && typeof Coherent.call === "function") {
+      const panelId = ui && (ui.panelID || ui.getAttribute("panel-id"));
+      if (panelId) Coherent.call("TOOLBAR_BUTTON_TOGGLE", panelId, false);
+    }
   }
 
   connect() {

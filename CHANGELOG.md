@@ -7,6 +7,7 @@
 - Added a measured **CPU Now** column using a short local per-process sample; retained the curated **Impact** guidance and existing memory reading because GPU-Z reports total GPU load rather than reliable per-application GPU usage.
 - Blocked session startup when the selected simulator is already running, preventing partial optimization and duplicate launches.
 - Added bounded DCS launcher-to-simulator PID handoff for `DCS.exe` and `DCS_mt.exe`, including CPU-tuning and dashboard-monitor transfer before restoration.
+- Added a dedicated top-right **×** button to the MSFS toolbar dashboard. It closes only the in-simulator panel and leaves the optimizer session running on the Windows desktop.
 - Expanded automated coverage to 65 passing tests.
 
 ## 2.4.2 — 2026-10-03
