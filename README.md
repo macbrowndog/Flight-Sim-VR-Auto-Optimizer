@@ -117,6 +117,10 @@ The application scans Steam library manifests, Microsoft Store packages, DCS reg
 
 Additional simulator configurations may be added in future releases.
 
+### Manually configured simulators
+
+If detection misses an installation, open **SIMULATORS → ADD**, choose a supported simulator type (or **Custom**), and enter a name, the full game EXE path, and optional arguments. For example, DCS can use `C:\DCS World\bin\DCS.exe` with `--force_enable_VR --force_OpenXR`. A supported type overrides its automatic launch target while retaining profile associations; entries are shared across profiles on this PC and are not included in profile exports. Select a row to **EDIT**, **REMOVE** a custom entry, or **RESET OVERRIDE** to return to automatic detection. Missing EXEs stay listed so their paths can be repaired. Choose the actual game EXE: monitoring uses its filename and does not follow launcher handoffs or replacement processes.
+
 ## Optional session adjustments
 
 - CPU-aware power plan: Windows Balanced for AMD X3D; temporary Ultimate Performance for other supported CPUs

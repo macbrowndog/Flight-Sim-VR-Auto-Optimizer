@@ -141,6 +141,7 @@ public static class UserProfileStore
     public static AppConfig CreateContinuedConfig(AppConfig current, PendingLaunch pending) => new()
     {
         SelectedSimulatorId = pending.SimulatorId,
+        ManualSimulators = current.ManualSimulators.ToList(),
         SessionMode = pending.SessionMode,
         Options = Copy(pending.Options),
         CustomApplications = pending.CustomApplications.Select(Copy).ToList(),
