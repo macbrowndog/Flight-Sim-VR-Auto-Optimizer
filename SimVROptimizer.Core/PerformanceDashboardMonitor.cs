@@ -11,7 +11,7 @@ public sealed class PerformanceDashboardMonitor : IAsyncDisposable
     private readonly AppPaths _paths;
     private readonly FileLogger _logger;
     private readonly ConcurrentQueue<double> _frameTimes = new();
-    private readonly List<double> _sessionFrameTimes = [];
+    private readonly Queue<double> _recentFrameTimes = new();
     private readonly CpuUsageSampler _cpuSampler = new();
     private CancellationTokenSource? _cancellation;
     private Task? _samplingTask;
@@ -33,6 +33,9 @@ public sealed class PerformanceDashboardMonitor : IAsyncDisposable
     private int _simulatorProcessId;
     private string _simulatorProcessName = "";
     private string _simConnectUnavailableReason = "SimConnect FPS source was not available";
+    private double _sessionFrameTimeTotal;
+    private long _sessionFrameCount;
+    private DateTime _lastCsvFlushUtc;
     private volatile bool _anomalyTrackingEnabled = true;
 
     public PerformanceDashboardMonitor(AppPaths paths, FileLogger logger)
@@ -61,7 +64,10 @@ public sealed class PerformanceDashboardMonitor : IAsyncDisposable
         (_mainThreadId, _lastMainThreadCpu) = FindMainThread(_simulator);
         _lastSampleUtc = DateTime.UtcNow;
         _cpuSampler.Reset();
-        _sessionFrameTimes.Clear();
+        _recentFrameTimes.Clear();
+        _sessionFrameTimeTotal = 0;
+        _sessionFrameCount = 0;
+        _lastCsvFlushUtc = DateTime.UtcNow;
         _presentMonHeaders = null;
         _captureStage = 0;
         _captureTimeoutReported = false;
@@ -76,7 +82,7 @@ public sealed class PerformanceDashboardMonitor : IAsyncDisposable
             Directory.CreateDirectory(_paths.TelemetryDirectory);
             var path = Path.Combine(_paths.TelemetryDirectory, $"telemetry-{DateTime.Now:yyyyMMdd-HHmmss}-pid{processId}.csv");
             _csv = new StreamWriter(path, false, new UTF8Encoding(false));
-            await _csv.WriteLineAsync("Timestamp,FPS,AverageFPS,OnePercentLowFPS,FrameTimeMs,SystemCPU,SimulatorCPU,MainThreadMs,MemoryMB,CpuSpike,Stutter").ConfigureAwait(false);
+            await _csv.WriteLineAsync("Timestamp,FPS,AverageFPS,FrameTimeMs,SystemCPU,SimulatorCPU,MainThreadMs,MemoryMB,CpuSpike,Stutter").ConfigureAwait(false);
             await _logger.WriteAsync($"Performance CSV logging enabled: {path}", cancellationToken).ConfigureAwait(false);
         }
 
@@ -167,15 +173,19 @@ public sealed class PerformanceDashboardMonitor : IAsyncDisposable
                 {
                     if (frameTime is > 0 and < 10000) recentFrames.Add(frameTime);
                 }
-                _sessionFrameTimes.AddRange(recentFrames);
-                if (_sessionFrameTimes.Count > 120000) _sessionFrameTimes.RemoveRange(0, _sessionFrameTimes.Count - 120000);
+                foreach (var frameTime in recentFrames)
+                {
+                    _sessionFrameTimeTotal += frameTime;
+                    _sessionFrameCount++;
+                    _recentFrameTimes.Enqueue(frameTime);
+                    while (_recentFrameTimes.Count > 240) _recentFrameTimes.Dequeue();
+                }
 
                 var currentFrame = recentFrames.Count > 0 ? recentFrames.Average() : (double?)null;
                 var fps = currentFrame.HasValue ? 1000d / currentFrame.Value : (double?)null;
                 var mainThreadFrameTime = CalculateMainThreadFrameTimeMs(mainThreadCpu, fps);
-                var averageFps = _sessionFrameTimes.Count > 0 ? 1000d / _sessionFrameTimes.Average() : (double?)null;
-                var oneLow = CalculateOnePercentLow(_sessionFrameTimes);
-                var median = Median(_sessionFrameTimes.TakeLast(240).ToArray());
+                var averageFps = _sessionFrameCount > 0 ? 1000d / (_sessionFrameTimeTotal / _sessionFrameCount) : (double?)null;
+                var median = Median(_recentFrameTimes.ToArray());
                 var stutter = _anomalyTrackingEnabled
                     && currentFrame.HasValue
                     && currentFrame.Value > Math.Max(33.3, median * 1.75);
@@ -183,7 +193,7 @@ public sealed class PerformanceDashboardMonitor : IAsyncDisposable
                 var cpuSpike = _anomalyTrackingEnabled
                     && (systemCpu >= 90 || cores.Any(value => value >= 98));
                 var sample = new PerformanceTelemetrySample(
-                    DateTimeOffset.Now, fps, averageFps, oneLow, currentFrame,
+                    DateTimeOffset.Now, fps, averageFps, null, currentFrame,
                     Math.Clamp(systemCpu, 0, 100), Math.Clamp(processCpu, 0, 100),
                     mainThreadFrameTime, _simulator.WorkingSet64 / 1024 / 1024,
                     cores, cpuSpike, stutter, _frameSourceStatus);
@@ -191,10 +201,14 @@ public sealed class PerformanceDashboardMonitor : IAsyncDisposable
                 if (_csv is not null)
                 {
                     await _csv.WriteLineAsync(string.Join(',',
-                        sample.Timestamp.ToString("O"), N(sample.Fps), N(sample.AverageFps), N(sample.OnePercentLowFps), N(sample.FrameTimeMs),
+                        sample.Timestamp.ToString("O"), N(sample.Fps), N(sample.AverageFps), N(sample.FrameTimeMs),
                         N(sample.SystemCpuPercent), N(sample.SimulatorCpuPercent), N(sample.MainThreadFrameTimeMs), sample.SimulatorMemoryMb,
                         sample.CpuSpike, sample.Stutter)).ConfigureAwait(false);
-                    await _csv.FlushAsync(cancellationToken).ConfigureAwait(false);
+                    if (now - _lastCsvFlushUtc >= TimeSpan.FromSeconds(10))
+                    {
+                        await _csv.FlushAsync(cancellationToken).ConfigureAwait(false);
+                        _lastCsvFlushUtc = now;
+                    }
                 }
             }
             catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
@@ -444,14 +458,6 @@ public sealed class PerformanceDashboardMonitor : IAsyncDisposable
         }
         values.Add(current.ToString());
         return values.ToArray();
-    }
-
-    public static double? CalculateOnePercentLow(IReadOnlyList<double> frameTimes)
-    {
-        if (frameTimes.Count < 10) return null;
-        var ordered = frameTimes.OrderBy(value => value).ToArray();
-        var worstCount = Math.Max(1, (int)Math.Ceiling(ordered.Length * 0.01));
-        return 1000d / ordered.TakeLast(worstCount).Average();
     }
 
     public static double? HoldLastReading(double? freshValue, double? previousValue, TimeSpan age, TimeSpan holdDuration)

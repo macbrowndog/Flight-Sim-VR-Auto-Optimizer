@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Reduced in-flight monitoring overhead by removing the unused live 1% low calculation, keeping only a short frame-time window for stutter detection, batching optional CSV flushes, and skipping desktop graph rebuilds while the dashboard is hidden or the app is minimized.
 - Preserved current application and service checkbox choices across restarts without silently reapplying an older active-profile snapshot; **Load**, **Save Changes** and **Revert** retain their explicit profile behavior.
 - Added an **Invert Selection** action for applications that reverses selectable choices while leaving protected and required workloads unchanged.
 - Added a measured **CPU Now** column using a short local per-process sample; retained the curated **Impact** guidance and existing memory reading because GPU-Z reports total GPU load rather than reliable per-application GPU usage.

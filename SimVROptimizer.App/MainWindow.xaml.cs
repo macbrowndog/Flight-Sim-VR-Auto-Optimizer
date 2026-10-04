@@ -1666,7 +1666,8 @@ public partial class MainWindow : Window
             ProcessorLoadSummarizer.Summarize(_cpuProfile, sample.LogicalProcessorUsage));
 
         UpdateDashboardCounterDisplay();
-        RedrawDashboardGraphs();
+        if (WindowState != WindowState.Minimized && ReferenceEquals(MainTabs.SelectedItem, DashboardTab))
+            RedrawDashboardGraphs();
     }
 
     private void UpdateDashboardCounterDisplay()

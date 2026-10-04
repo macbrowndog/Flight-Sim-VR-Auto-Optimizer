@@ -1267,11 +1267,6 @@ static Task TestPerformanceTelemetryAsync()
     Equal("Hardware: Independent Flip", values[2]);
     Equal("16.667", values[3]);
 
-    var steady = Enumerable.Repeat(10d, 99).Append(50d).ToArray();
-    var onePercentLow = PerformanceDashboardMonitor.CalculateOnePercentLow(steady);
-    True(onePercentLow.HasValue);
-    Equal(20d, onePercentLow!.Value);
-    Equal<double?>(null, PerformanceDashboardMonitor.CalculateOnePercentLow([16, 17, 16]));
     Equal<double?>(60, PerformanceDashboardMonitor.HoldLastReading(null, 60, TimeSpan.FromMilliseconds(500), TimeSpan.FromSeconds(3)));
     Equal<double?>(72, PerformanceDashboardMonitor.HoldLastReading(72, 60, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(3)));
     Equal<double?>(null, PerformanceDashboardMonitor.HoldLastReading(null, 60, TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(3)));
