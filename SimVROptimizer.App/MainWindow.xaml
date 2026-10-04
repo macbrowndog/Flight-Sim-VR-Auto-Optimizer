@@ -60,13 +60,21 @@
 
         <TabControl x:Name="MainTabs" Grid.Row="2" Background="#090E10" BorderBrush="{StaticResource BorderBrush}" Foreground="{StaticResource TextBrush}" SelectionChanged="MainTabs_SelectionChanged">
             <TabItem Header="SIMULATORS">
+                <DockPanel>
+                <StackPanel x:Name="SimulatorManagementPanel" DockPanel.Dock="Top" Orientation="Horizontal" Margin="8" IsEnabled="False">
+                    <Button Content="ADD" Click="AddSimulator_Click" Padding="12,5" Background="#233137" Foreground="{StaticResource GreenBrush}" />
+                    <Button x:Name="EditSimulatorButton" Content="EDIT" Click="EditSimulator_Click" Padding="12,5" Background="#233137" Foreground="{StaticResource AccentBrush}" IsEnabled="False" />
+                    <Button x:Name="RemoveSimulatorButton" Content="REMOVE" Click="RemoveSimulator_Click" Padding="12,5" Background="#233137" Foreground="{StaticResource RedBrush}" IsEnabled="False" />
+                </StackPanel>
                 <DataGrid x:Name="SimulatorGrid" AutoGenerateColumns="False" IsReadOnly="True" Background="#0C1214" Foreground="{StaticResource TextBrush}"
+                          SelectionMode="Single" SelectionChanged="SimulatorGrid_SelectionChanged"
                           RowBackground="#0C1214" AlternatingRowBackground="#111A1D" GridLinesVisibility="Horizontal" BorderThickness="0">
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="SIMULATOR" Binding="{Binding Name}" Width="2*" />
                         <DataGridTextColumn Header="DETECTION SOURCE" Binding="{Binding Detection}" Width="3*" />
                     </DataGrid.Columns>
                 </DataGrid>
+                </DockPanel>
             </TabItem>
             <TabItem Header="APPLICATIONS">
                 <Grid Background="#0C1214">

@@ -175,6 +175,14 @@ public sealed class SimulatorLauncher
     {
         var useFastLaunch = options.UseMsfs2024FastLaunch
             && simulator.Id is "msfs2024-steam" or "msfs2024-store";
+        if (useFastLaunch && simulator.LaunchKind == LaunchKind.Executable)
+        {
+            var arguments = simulator.Arguments;
+            if (!arguments.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+                .Any(argument => argument.Trim('"').Equals("-FastLaunch", StringComparison.OrdinalIgnoreCase)))
+                arguments = string.IsNullOrWhiteSpace(arguments) ? "-FastLaunch" : arguments + " -FastLaunch";
+            return new SimulatorLaunchPlan(simulator.LaunchKind, simulator.LaunchTarget, arguments);
+        }
         if (useFastLaunch && simulator.Id == "msfs2024-steam")
             return new SimulatorLaunchPlan(simulator.LaunchKind, simulator.LaunchTarget + "//-FastLaunch/", "");
         if (useFastLaunch && simulator.Id == "msfs2024-store")
@@ -201,6 +209,7 @@ public sealed class SimulatorLauncher
         else
         {
             startInfo = new ProcessStartInfo(plan.Target) { UseShellExecute = true };
+            if (plan.Kind == LaunchKind.Executable) startInfo.WorkingDirectory = plan.WorkingDirectory;
             if (!string.IsNullOrWhiteSpace(plan.Arguments)) startInfo.Arguments = plan.Arguments;
         }
         Process.Start(startInfo);
@@ -229,7 +238,10 @@ public sealed class SimulatorLauncher
     }
 }
 
-public sealed record SimulatorLaunchPlan(LaunchKind Kind, string Target, string Arguments);
+public sealed record SimulatorLaunchPlan(LaunchKind Kind, string Target, string Arguments)
+{
+    public string WorkingDirectory => Kind == LaunchKind.Executable ? Path.GetDirectoryName(Target) ?? "" : "";
+}
 
 [ComImport]
 [Guid("2E941141-7F97-4756-BA1D-9DECDE894A3D")]

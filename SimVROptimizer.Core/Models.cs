@@ -12,6 +12,8 @@ public sealed record SimulatorDefinition(
     string LaunchTarget,
     string Arguments = "");
 
+public sealed record ManualSimulator(string Id, string Name, string ExecutablePath, string Arguments = "");
+
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum LaunchKind
 {
@@ -516,6 +518,7 @@ public sealed class AppConfig
     private Dictionary<string, ApplicationAfterFlightAction> _applicationAfterFlightActions = new(StringComparer.OrdinalIgnoreCase);
 
     public string? SelectedSimulatorId { get; set; }
+    public List<ManualSimulator> ManualSimulators { get; set; } = [];
     public SessionMode SessionMode { get; set; } = SessionMode.Manual;
     public OptimizerOptions Options { get; set; } = new();
     public List<CustomApplicationRule> CustomApplications { get; set; } = [];

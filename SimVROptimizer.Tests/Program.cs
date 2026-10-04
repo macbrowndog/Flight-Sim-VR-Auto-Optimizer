@@ -43,6 +43,9 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Persistent custom application rule", TestCustomApplicationRuleAsync),
     ("Companion application preload rules", TestCompanionApplicationRulesAsync),
     ("Ten simulator configurations", TestSimulatorCatalogAsync),
+    ("Manual simulator merge and launch plans", TestManualSimulatorsAsync),
+    ("Manual simulator persistence and profiles", TestManualSimulatorPersistenceAsync),
+    ("Manual simulator process protection", TestManualSimulatorProtectionAsync),
     ("IL-2 Korea standalone launcher resolution", TestIl2KoreaLauncherResolutionAsync),
     ("MSFS 2024 FastLaunch plans", TestMsfs2024FastLaunchAsync),
     ("Bundled OpenXR Turbo layer", TestOpenXrTurboLayerAsync),
@@ -799,9 +802,128 @@ static Task TestOpenXrTurboLayerAsync()
 static Task TestSimulatorCatalogAsync()
 {
     Equal(10, SimulatorCatalog.SupportedConfigurationCount);
+    Equal(10, SimulatorCatalog.Identities.Count);
+    Equal(10, SimulatorCatalog.Identities.Select(item => item.Key).Distinct().Count());
     True(SimulatorCatalog.Find("il2-sturmovik-steam") is not null);
     Equal("il2-sturmovik-steam", SimulatorCatalog.SteamByAppId["307960"].Id);
     return Task.CompletedTask;
+}
+
+static async Task TestManualSimulatorsAsync()
+{
+    var directory = Path.Combine(AppContext.BaseDirectory, "test-data", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(directory);
+    try
+    {
+        var executable = Path.Combine(directory, "DCS VR.exe");
+        await File.WriteAllTextAsync(executable, "test fixture; never launched");
+        const string arguments = "--force_enable_VR --force_OpenXR --profile \"My VR Profile\"";
+        var manual = new ManualSimulator("dcs-steam", "DCS VR", executable, arguments);
+        var automatic = new DetectedSimulator { Definition = SimulatorCatalog.Find("dcs-steam")!, Detection = "Steam manifest" };
+        var merged = SystemScanner.MergeSimulators([automatic], [manual]);
+        Equal(1, merged.Count);
+        var definition = merged.Single().Definition;
+        Equal(manual.Id, definition.Id);
+        Equal(manual.Name, definition.Name);
+        Equal("DCS VR", definition.ProcessNames.Single());
+        Equal(LaunchKind.Executable, definition.LaunchKind);
+        True(merged.Single().Detection.StartsWith("Manual override:"));
+        var plan = SimulatorLauncher.CreateLaunchPlan(definition, new OptimizerOptions());
+        Equal(executable, plan.Target);
+        Equal(arguments, plan.Arguments);
+        Equal(directory, plan.WorkingDirectory);
+
+        // Overrides work without automatic detection, including the dynamic standalone identities.
+        foreach (var id in SimulatorCatalog.Identities.Select(item => item.Key))
+            Equal(id, SystemScanner.MergeSimulators([], [manual with { Id = id }]).Single().Definition.Id);
+        Equal(1, SystemScanner.MergeSimulators([automatic], [manual with { Id = "DCS-STEAM" }]).Count);
+        Equal(automatic, SystemScanner.MergeSimulators([automatic], []).Single());
+        Equal(0, SystemScanner.MergeSimulators([], []).Count);
+
+        var custom = manual with { Id = "custom-" + Guid.NewGuid().ToString("N") };
+        var preset = custom with { Id = "custom-" + Guid.NewGuid().ToString("N"), Arguments = "--other-preset" };
+        Equal(3, SystemScanner.MergeSimulators([automatic], [custom, preset]).Count);
+        True(SystemScanner.MergeSimulators([], [custom]).Single().Detection.StartsWith("Custom:"));
+        var edited = custom with { Name = "Renamed", Arguments = "--edited" };
+        Equal(custom.Id, SystemScanner.MergeSimulators([], [edited]).Single().Definition.Id);
+
+        // A missing override must not silently fall back to the automatic launch target.
+        File.Delete(executable);
+        var missing = SystemScanner.MergeSimulators([automatic], [manual]).Single();
+        True(missing.Detection.Contains("EXE missing"));
+        Equal(executable, missing.Definition.LaunchTarget);
+        var preflight = SessionPreflight.Evaluate(new SessionPreflightContext(true, false, missing.Definition,
+            new(VrRuntimePreference.None, true, false, "None selected."), [], [], OptimizationProfile.Standard));
+        True(!preflight.CanProceed);
+        Equal(1, preflight.BlockedCount);
+    }
+    finally { Directory.Delete(directory, true); }
+}
+
+static async Task TestManualSimulatorPersistenceAsync()
+{
+    var directory = Path.Combine(AppContext.BaseDirectory, "test-data", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(directory);
+    try
+    {
+        var path = Path.Combine(directory, "config.json");
+        await File.WriteAllTextAsync(path, "{\"SelectedSimulatorId\":\"dcs-standalone\"}");
+        var config = await JsonStore.LoadRequiredAsync<AppConfig>(path);
+        Equal(0, config.ManualSimulators.Count);
+        var entry = new ManualSimulator("custom-" + Guid.NewGuid().ToString("N"), "Custom simulator", @"C:\Flight Sims\Game.exe", "--vr \"two words\"");
+        config.ManualSimulators.Add(entry);
+        config.SelectedSimulatorId = entry.Id;
+        UserProfileStore.SaveOrReplace(config, "Custom VR");
+        config.SelectedSimulatorId = "dcs-standalone";
+        UserProfileStore.SaveOrReplace(config, "DCS");
+        var edited = entry with { ExecutablePath = @"D:\Flight Sims\Game.exe" };
+        config.ManualSimulators[0] = edited;
+        True(UserProfileStore.TryApply(config, "Custom VR"));
+        Equal(entry.Id, config.SelectedSimulatorId);
+        Equal(edited, config.ManualSimulators.Single());
+        True(UserProfileStore.TryApply(config, "DCS"));
+        Equal(edited, config.ManualSimulators.Single());
+        await JsonStore.SaveAtomicAsync(path, config);
+        var loaded = await JsonStore.LoadRequiredAsync<AppConfig>(path);
+        Equal(edited, loaded.ManualSimulators.Single());
+        var continued = UserProfileStore.CreateContinuedConfig(loaded, new PendingLaunch
+        {
+            SimulatorId = entry.Id, SessionMode = SessionMode.Manual, Options = new OptimizerOptions()
+        });
+        Equal(entry.Id, continued.SelectedSimulatorId);
+        Equal(edited, continued.ManualSimulators.Single());
+        loaded.ManualSimulators.Clear();
+        Equal(1, continued.ManualSimulators.Count);
+
+        var exportPath = Path.Combine(directory, "profile.json");
+        await UserProfileStore.ExportAsync(config.SavedProfiles.First(item => item.Name == "Custom VR"), exportPath);
+        var export = await File.ReadAllTextAsync(exportPath);
+        True(!export.Contains("ManualSimulators"));
+        True(!export.Contains("ExecutablePath"));
+        Equal(entry.Id, (await UserProfileStore.ReadImportAsync(exportPath)).SelectedSimulatorId);
+    }
+    finally { Directory.Delete(directory, true); }
+}
+
+static async Task TestManualSimulatorProtectionAsync()
+{
+    using var process = System.Diagnostics.Process.GetCurrentProcess();
+    var executable = Environment.ProcessPath!;
+    var entry = new ManualSimulator("custom-protection-test", "Test simulator", executable);
+    var commands = new FakeCommandRunner();
+    var result = await new SystemScanner(commands).ScanAsync(
+        [new CustomApplicationRule { ProcessName = process.ProcessName, RestartExecutablePath = executable }],
+        manualSimulators: [entry]);
+    Equal(executable, result.Simulators.Single(item => item.Definition.Id == entry.Id).Definition.LaunchTarget);
+    var candidate = result.Applications.Single(item => item.ProcessName.Equals(process.ProcessName, StringComparison.OrdinalIgnoreCase));
+    True(!candidate.CanStop);
+    True(!candidate.Selected);
+    Equal(WorkloadClassification.Protected, candidate.Classification);
+    SessionSelectionPolicy.ApplySaved([candidate], [], new Dictionary<string, bool> { [process.ProcessName] = true },
+        new Dictionary<string, bool>(), OptimizationProfile.Aggressive, contentCreatorMode: false);
+    True(!candidate.Selected);
+    SessionSelectionPolicy.SelectAutomatic([candidate], [], profile: OptimizationProfile.Aggressive);
+    True(!candidate.Selected);
 }
 
 static Task TestSelectionStateNotificationAsync()
@@ -1239,6 +1361,24 @@ static Task TestMsfs2024FastLaunchAsync()
     options.UseMsfs2024FastLaunch = true;
     var msfs2020 = SimulatorLauncher.CreateLaunchPlan(SimulatorCatalog.Find("msfs2020-steam")!, options);
     Equal("steam://run/1250410", msfs2020.Target);
+    Equal("", msfs2020.WorkingDirectory);
+
+    foreach (var id in new[] { "msfs2024-steam", "msfs2024-store" })
+    {
+        var executable = SimulatorCatalog.Find(id)! with
+        {
+            LaunchKind = LaunchKind.Executable, LaunchTarget = @"C:\Flight Sims\FlightSimulator2024.exe", Arguments = "--custom \"two words\""
+        };
+        var manual = SimulatorLauncher.CreateLaunchPlan(executable, options);
+        Equal(executable.LaunchTarget, manual.Target);
+        Equal(executable.Arguments + " -FastLaunch", manual.Arguments);
+        Equal(@"C:\Flight Sims", manual.WorkingDirectory);
+        foreach (var arguments in new[] { "-FastLaunch", "--custom -fastlaunch", "\"-FastLaunch\" --custom" })
+            Equal(arguments, SimulatorLauncher.CreateLaunchPlan(executable with { Arguments = arguments }, options).Arguments);
+        Equal("-FastLaunch", SimulatorLauncher.CreateLaunchPlan(executable with { Arguments = "" }, options).Arguments);
+        Equal(executable.Arguments, SimulatorLauncher.CreateLaunchPlan(executable,
+            new OptimizerOptions { UseMsfs2024FastLaunch = false }).Arguments);
+    }
     return Task.CompletedTask;
 }
 

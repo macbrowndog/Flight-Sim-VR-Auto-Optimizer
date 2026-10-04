@@ -16,6 +16,14 @@ public static class SimulatorCatalog
     // Seven catalog entries plus dynamically resolved DCS, X-Plane, and IL-2 Korea standalone targets.
     public static int SupportedConfigurationCount => All.Count + 3;
 
+    public static IReadOnlyList<KeyValuePair<string, string>> Identities { get; } = All
+        .Select(item => new KeyValuePair<string, string>(item.Id, item.Name))
+        .Concat([
+            new("dcs-standalone", "DCS World (Standalone)"),
+            new("xplane12-standalone", "X-Plane 12 (Standalone)"),
+            new("il2-korea-standalone", "Korea. IL-2 Series (Standalone)")
+        ]).ToArray();
+
     public static SimulatorDefinition? Find(string? id) =>
         All.FirstOrDefault(item => string.Equals(item.Id, id, StringComparison.OrdinalIgnoreCase));
 

@@ -35,6 +35,7 @@ public partial class MainWindow : Window
     private bool _allowClose;
     private bool _applyingConfig;
     private bool _applyingScanResults;
+    private bool _startingSession;
     private bool _applyingDlssIndicatorState;
     private bool _uiReady;
     private readonly SemaphoreSlim _configSaveLock = new(1, 1);
@@ -154,6 +155,19 @@ public partial class MainWindow : Window
     private async void StartButton_Click(object sender, RoutedEventArgs e) => await StartSelectedSessionAsync();
 
     private async Task StartSelectedSessionAsync(bool automaticConfirmed = false)
+    {
+        if (_startingSession) return;
+        _startingSession = true;
+        SimulatorManagementPanel.IsEnabled = false;
+        try { await StartSelectedSessionCoreAsync(automaticConfirmed); }
+        finally
+        {
+            _startingSession = false;
+            SimulatorManagementPanel.IsEnabled = ScanButton.IsEnabled && !_coordinator.IsRunning;
+        }
+    }
+
+    private async Task StartSelectedSessionCoreAsync(bool automaticConfirmed)
     {
         if (SimulatorCombo.SelectedItem is not DetectedSimulator detectedSimulator)
         {
@@ -1017,6 +1031,7 @@ public partial class MainWindow : Window
     private AppConfig ReadConfigFromControls(string simulatorId, int timeout) => new()
     {
         SelectedSimulatorId = simulatorId,
+        ManualSimulators = _config.ManualSimulators.ToList(),
         SessionMode = ModeCombo.SelectedItem is SessionMode mode ? mode : SessionMode.Manual,
         Options = new OptimizerOptions
         {
@@ -1989,8 +2004,77 @@ public partial class MainWindow : Window
         _config = ReadConfigFromControls(simulatorId, timeout);
     }
 
+    private async void AddSimulator_Click(object sender, RoutedEventArgs e) => await EditManualSimulatorAsync(null);
+
+    private async void EditSimulator_Click(object sender, RoutedEventArgs e)
+    {
+        if (SimulatorGrid.SelectedItem is not DetectedSimulator selected) return;
+        var initial = _config.ManualSimulators.FirstOrDefault(item => item.Id.Equals(selected.Definition.Id, StringComparison.OrdinalIgnoreCase))
+            ?? new ManualSimulator(selected.Definition.Id, selected.Name,
+                selected.Definition.LaunchKind == LaunchKind.Executable ? selected.Definition.LaunchTarget : "", selected.Definition.Arguments);
+        await EditManualSimulatorAsync(initial);
+    }
+
+    private async Task EditManualSimulatorAsync(ManualSimulator? initial)
+    {
+        var dialog = new ManualSimulatorWindow(initial, _config.ManualSimulators) { Owner = this };
+        if (dialog.ShowDialog() != true || dialog.Simulator is not { } simulator) return;
+        var entries = _config.ManualSimulators.Where(item => !item.Id.Equals(simulator.Id, StringComparison.OrdinalIgnoreCase)).ToList();
+        entries.Add(simulator);
+        await SaveManualSimulatorsAsync(entries, simulator.Id);
+    }
+
+    private async void RemoveSimulator_Click(object sender, RoutedEventArgs e)
+    {
+        if (SimulatorGrid.SelectedItem is not DetectedSimulator selected) return;
+        var entry = _config.ManualSimulators.FirstOrDefault(item => item.Id.Equals(selected.Definition.Id, StringComparison.OrdinalIgnoreCase));
+        if (entry is null) return;
+        var isOverride = SimulatorCatalog.Identities.Any(item => item.Key == entry.Id);
+        var message = isOverride ? $"Reset the launch override for {entry.Name}? Automatic detection will be used again."
+            : $"Remove {entry.Name}? Saved profiles referring to it will need another simulator selection.";
+        if (MessageBox.Show(this, message, "Remove simulator configuration", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        await SaveManualSimulatorsAsync(_config.ManualSimulators.Where(item => item != entry).ToList(),
+            (SimulatorCombo.SelectedItem as DetectedSimulator)?.Definition.Id ?? "");
+    }
+
+    private async Task SaveManualSimulatorsAsync(List<ManualSimulator> entries, string selectedId)
+    {
+        IsEnabled = false;
+        try
+        {
+            await _configSaveLock.WaitAsync();
+            try
+            {
+                var updated = ReadConfigFromControls(selectedId, int.TryParse(TimeoutBox.Text, out var timeout) ? timeout : _config.Options.LaunchTimeoutSeconds);
+                updated.ManualSimulators = entries;
+                await JsonStore.SaveAtomicAsync(_paths.ConfigFile, updated);
+                _config = updated;
+            }
+            finally { _configSaveLock.Release(); }
+            await ScanSystemAsync();
+            SimulatorGrid.SelectedItem = SimulatorCombo.SelectedItem;
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(this, "The simulator configuration could not be saved: " + exception.Message,
+                "Save simulator", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally { IsEnabled = true; }
+    }
+
+    private void SimulatorGrid_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (EditSimulatorButton is null || RemoveSimulatorButton is null) return;
+        var selected = SimulatorGrid.SelectedItem as DetectedSimulator;
+        EditSimulatorButton.IsEnabled = selected is not null;
+        RemoveSimulatorButton.IsEnabled = selected is not null && _config.ManualSimulators.Any(item => item.Id == selected.Definition.Id);
+        RemoveSimulatorButton.Content = selected is not null && SimulatorCatalog.Identities.Any(item => item.Key == selected.Definition.Id)
+            ? "RESET OVERRIDE" : "REMOVE";
+    }
+
     private async Task ScanSystemAsync()
     {
+        SimulatorManagementPanel.IsEnabled = false;
         ScanButton.IsEnabled = false;
         StartButton.IsEnabled = false;
         SetStateDisplay("SCANNING THIS PC", "AccentBrush");
@@ -1999,7 +2083,7 @@ public partial class MainWindow : Window
         {
             var customApplications = ReadCustomApplications();
             _config.CustomApplications = customApplications;
-            var result = await _scanner.ScanAsync(customApplications);
+            var result = await _scanner.ScanAsync(customApplications, manualSimulators: _config.ManualSimulators);
             if (OnlineGuidanceCheck.IsChecked == true)
             {
                 AppendStatus("Identity scan: reading local executable metadata, signatures, and hashes. No local details are uploaded.");
@@ -2065,7 +2149,7 @@ public partial class MainWindow : Window
                 .ToDictionary(group => group.Key, group => group.Count());
             AppendStatus($"Service guidance: {ServiceCount(WorkloadClassification.Recommended)} recommend, {ServiceCount(WorkloadClassification.Optional) + ServiceCount(WorkloadClassification.Unknown)} keep running, {ServiceCount(WorkloadClassification.Protected)} protected.");
             if (result.Simulators.Count == 0)
-                AppendStatus("No supported simulator installation was detected. Rescan after installing or repairing its launcher manifest.");
+                AppendStatus("No simulator installation was detected. Use Add on the Simulators tab to choose its EXE, or rescan after repairing its launcher manifest.");
 
             int Count(WorkloadClassification classification) =>
                 classifications.TryGetValue(classification, out var count) ? count : 0;
@@ -2080,6 +2164,7 @@ public partial class MainWindow : Window
         {
             _applyingScanResults = false;
             ScanButton.IsEnabled = !_coordinator.IsRunning;
+            SimulatorManagementPanel.IsEnabled = ScanButton.IsEnabled && !_startingSession;
             SetStateDisplay("READY", "GreenBrush");
             UpdateRecoveryState();
             StartButton.IsEnabled = StartButton.IsEnabled && SimulatorCombo.Items.Count > 0;
@@ -2465,6 +2550,7 @@ public partial class MainWindow : Window
         AppsGrid.IsEnabled = !running;
         ServicesGrid.IsEnabled = !running && ProfileCombo.SelectedItem is OptimizationProfile.Aggressive;
         ScanButton.IsEnabled = !running;
+        SimulatorManagementPanel.IsEnabled = !running && !_startingSession;
         ModeCombo.IsEnabled = !running;
         ProfileCombo.IsEnabled = !running;
         VrRuntimeCombo.IsEnabled = !running;

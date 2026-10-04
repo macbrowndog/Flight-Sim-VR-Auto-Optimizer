@@ -127,7 +127,8 @@ public sealed class SystemScanner
 
     public async Task<SystemScanResult> ScanAsync(
         IReadOnlyList<CustomApplicationRule>? customApplications = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IReadOnlyList<ManualSimulator>? manualSimulators = null)
     {
         var simulatorsTask = DetectSimulatorsAsync(cancellationToken);
         var servicesTask = ScanServicesAsync(cancellationToken);
@@ -135,12 +136,43 @@ public sealed class SystemScanner
         try { cpuProfile = _cpuProfileProvider.GetProfile(); }
         catch { }
         var applications = ScanApplications(customApplications ?? [], cpuProfile);
+        var manualProcessNames = (manualSimulators ?? [])
+            .Select(item => Path.GetFileNameWithoutExtension(item.ExecutablePath))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var application in applications.Where(item => manualProcessNames.Contains(item.ProcessName)))
+        {
+            application.CanStop = false;
+            application.Selected = false;
+            application.Classification = WorkloadClassification.Protected;
+            application.ClassificationReason = "Manually configured simulator; protected from stopping.";
+        }
         return new SystemScanResult
         {
-            Simulators = await simulatorsTask.ConfigureAwait(false),
+            Simulators = MergeSimulators(await simulatorsTask.ConfigureAwait(false), manualSimulators ?? []),
             Applications = applications,
             Services = await servicesTask.ConfigureAwait(false)
         };
+    }
+
+    public static IReadOnlyList<DetectedSimulator> MergeSimulators(
+        IEnumerable<DetectedSimulator> detected,
+        IEnumerable<ManualSimulator> manualSimulators)
+    {
+        var found = detected.ToDictionary(item => item.Definition.Id, StringComparer.OrdinalIgnoreCase);
+        foreach (var manual in manualSimulators)
+        {
+            var source = SimulatorCatalog.Identities.Any(item => item.Key.Equals(manual.Id, StringComparison.OrdinalIgnoreCase))
+                ? "Manual override" : "Custom";
+            var missing = File.Exists(manual.ExecutablePath) ? "" : " (EXE missing)";
+            found[manual.Id] = new DetectedSimulator
+            {
+                Definition = new SimulatorDefinition(manual.Id, manual.Name,
+                    [Path.GetFileNameWithoutExtension(manual.ExecutablePath)],
+                    LaunchKind.Executable, manual.ExecutablePath, manual.Arguments),
+                Detection = $"{source}{missing}: {manual.ExecutablePath}"
+            };
+        }
+        return found.Values.OrderBy(item => item.Name).ToArray();
     }
 
     private async Task<IReadOnlyList<DetectedSimulator>> DetectSimulatorsAsync(CancellationToken cancellationToken)
