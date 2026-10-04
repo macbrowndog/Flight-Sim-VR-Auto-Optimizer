@@ -198,6 +198,15 @@ Licensed under the [MIT License](LICENSE).
 
 This project is based on the original VR Optimizer application developed by shark. Huge thanks to shark for open-sourcing the initial codebase and making this work possible.
 
+## Release notes — 2.4.3
+
+- Reduced in-flight monitoring overhead by removing the retired live 1% Low calculation, retaining only a short frame-time window for stutter detection, batching optional CSV writes, and pausing desktop graph redraws while hidden or minimized.
+- Preserved current application and service selections between restarts and added protected-aware **Invert Selection** plus measured **CPU Now** readings.
+- Added a pre-flight guard when the selected simulator is already running.
+- Added DCS launcher-to-main-process handoff so monitoring and optimization continue when `DCS.exe` or `DCS_mt.exe` replaces the launcher process.
+- Added a top-right **×** button to close the MSFS toolbar panel without ending the desktop optimization session.
+- Expanded automated validation to 65 passing tests.
+
 ## Release notes — 2.4.2
 
 - Reworked the desktop and MSFS toolbar dashboards with live GPU-Z GPU Load and VRAM-percentage readings, while retaining simulator memory and CPU/MainThread telemetry.

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.4.3 — 2026-10-04
 
 - Reduced in-flight monitoring overhead by removing the unused live 1% low calculation, keeping only a short frame-time window for stutter detection, batching optional CSV flushes, and skipping desktop graph rebuilds while the dashboard is hidden or the app is minimized.
 - Preserved current application and service checkbox choices across restarts without silently reapplying an older active-profile snapshot; **Load**, **Save Changes** and **Revert** retain their explicit profile behavior.
